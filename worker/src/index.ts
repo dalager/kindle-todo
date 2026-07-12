@@ -1,28 +1,78 @@
 /**
  * Kindle Todo — Cloudflare Worker.
  *
- * Serves the todo page and its API, backed by D1 (strong consistency).
- * Access is gated by a secret token in the URL (?t=...), since this is a
- * public Worker replacing the old LAN-private server. The HTML page reads the
- * token from its own query string and forwards it on every API call.
+ * Serves the todo page, a JSON API, and a full-screen /todo.png render, backed
+ * by a pluggable TodoProvider (currently Microsoft To Do). Access is gated by a
+ * secret token in the URL (?t=...).
  *
  * Routes (all require a valid ?t=<TODO_TOKEN>):
  *   GET  /                          -> HTML page
  *   GET  /api/todos                 -> [{ id, text, done }]
- *   POST /api/todos/{id}/complete   -> mark done, return the row
+ *   POST /api/todos/{id}/complete   -> mark done
+ *   GET  /todo.png                  -> full-screen 1072x1448 PNG (Kindle image mode)
+ *
+ * The provider's list is cached briefly (LIST_CACHE_TTL) so the Kindle's ~15s
+ * polling doesn't hammer the backend API; completing a task invalidates the
+ * cache so the change shows on the next poll.
  */
+import { renderTodoPng } from "./og";
+import type { Todo } from "./providers/types";
+import { createProvider, type ProviderEnv } from "./providers/factory";
 
-import { renderTodoPng, type Todo } from "./og";
-
-interface Env {
-  DB: D1Database;
+interface Env extends ProviderEnv {
   TODO_TOKEN: string;
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-// ES5 + XMLHttpRequest page for the ancient Kindle Voyage WebKit browser.
-// It reuses its own query string (which carries ?t=<token>) on API calls.
+/** Seconds to cache the provider's task list (bounds backend API calls). */
+const LIST_CACHE_TTL = 30;
+const LIST_CACHE_KEY = "https://todo.internal/list";
+
+// Reuse the provider across requests in the same isolate so its in-memory
+// access-token cache (and KV-backed refresh token) is shared.
+let providerSingleton: ReturnType<typeof createProvider> | undefined;
+function getProvider(env: Env) {
+  return (providerSingleton ??= createProvider(env));
+}
+
+/** Provider list, served from the edge cache when fresh to limit API calls. */
+async function getTodos(env: Env, ctx: ExecutionContext): Promise<Todo[]> {
+  const cache = caches.default;
+  const key = new Request(LIST_CACHE_KEY);
+  const hit = await cache.match(key);
+  if (hit) return (await hit.json()) as Todo[];
+
+  const todos = await getProvider(env).list();
+  ctx.waitUntil(
+    cache.put(
+      key,
+      new Response(JSON.stringify(todos), {
+        headers: { "Content-Type": "application/json", "Cache-Control": `max-age=${LIST_CACHE_TTL}` },
+      }),
+    ),
+  );
+  return todos;
+}
+
+function invalidateTodos(ctx: ExecutionContext): void {
+  ctx.waitUntil(caches.default.delete(new Request(LIST_CACHE_KEY)));
+}
+
+// ETag = strong hash of the exact state that determines the rendered image.
+async function etagFor(todos: Todo[]): Promise<string> {
+  const data = new TextEncoder().encode(JSON.stringify(todos));
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `"${hex}"`;
+}
+
+function authorized(url: URL, env: Env): boolean {
+  const t = url.searchParams.get("t");
+  return !!env.TODO_TOKEN && t === env.TODO_TOKEN;
+}
+
+// ES5 + XMLHttpRequest page for the ancient Kindle Voyage/PW4 WebKit browser.
 const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,7 +121,6 @@ const HTML = `<!DOCTYPE html>
       if (t.done) { continue; }
       visible++;
       var li = document.createElement("li");
-      li.id = "todo-" + t.id;
       var span = document.createElement("span");
       span.className = "txt";
       span.appendChild(document.createTextNode(t.text));
@@ -90,10 +139,10 @@ const HTML = `<!DOCTYPE html>
   function makeHandler(id, li) {
     return function () {
       li.className = "done";
-      xhr("POST", "/api/todos/" + id + "/complete" + Q, function (status) {
+      xhr("POST", "/api/todos/" + encodeURIComponent(id) + "/complete" + Q, function (status) {
         if (status < 200 || status >= 300) {
           li.className = "";
-          setMsg("Could not complete #" + id + " (status " + status + "). Tap again.");
+          setMsg("Could not complete (status " + status + "). Tap again.");
         } else { setMsg(""); }
       });
     };
@@ -113,29 +162,6 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-function authorized(url: URL, env: Env): boolean {
-  const t = url.searchParams.get("t");
-  return !!env.TODO_TOKEN && t === env.TODO_TOKEN;
-}
-
-interface TodoRow { id: number; text: string; done: number; }
-
-async function getTodos(env: Env): Promise<Todo[]> {
-  const { results } = await env.DB.prepare(
-    "SELECT id, text, done FROM todos ORDER BY id"
-  ).all<TodoRow>();
-  return results.map((r) => ({ id: r.id, text: r.text, done: !!r.done }));
-}
-
-// ETag = strong hash of the exact state that determines the rendered image.
-// Any todo change flips it; identical state keeps it stable across polls.
-async function etagFor(todos: Todo[]): Promise<string> {
-  const data = new TextEncoder().encode(JSON.stringify(todos));
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `"${hex}"`;
-}
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -153,22 +179,14 @@ export default {
     }
 
     // Full-screen PNG for the Kindle's non-interactive (image) mode.
-    // Conditional GET: cheap 304 when unchanged; render (once per change,
-    // via Cache API) only when the state hash flips.
     if (request.method === "GET" && path === "/todo.png") {
-      const todos = await getTodos(env);
+      const todos = await getTodos(env, ctx);
       const etag = await etagFor(todos);
 
-      // Client already has the current image -> tiny 304, no render, no redraw.
       if (request.headers.get("If-None-Match") === etag) {
-        return new Response(null, {
-          status: 304,
-          headers: { ETag: etag, "Cache-Control": "no-cache" },
-        });
+        return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-cache" } });
       }
 
-      // Serve the render for this exact state from the edge cache if present,
-      // so we rasterize at most once per distinct state.
       const cache = caches.default;
       const cacheKey = new Request(new URL(`/__png/${etag.slice(1, -1)}`, url.origin).toString());
       let body: ArrayBuffer;
@@ -178,52 +196,52 @@ export default {
       } else {
         const rendered = await renderTodoPng(todos, ctx);
         body = await rendered.arrayBuffer();
-        // Store immutably: the key already encodes the state hash.
         ctx.waitUntil(
           cache.put(
             cacheKey,
             new Response(body, {
-              headers: {
-                "Content-Type": "image/png",
-                "Cache-Control": "public, max-age=31536000, immutable",
-              },
-            })
-          )
+              headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=31536000, immutable" },
+            }),
+          ),
         );
       }
-
-      // Client copy: revalidate every poll (no-cache) and carry the ETag so the
-      // next poll can 304.
       return new Response(body, {
-        headers: {
-          "Content-Type": "image/png",
-          ETag: etag,
-          "Cache-Control": "no-cache",
-        },
+        headers: { "Content-Type": "image/png", ETag: etag, "Cache-Control": "no-cache" },
       });
     }
 
     // List
     if (path === "/api/todos") {
       if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
-      return Response.json(await getTodos(env), { headers: NO_STORE });
+      return Response.json(await getTodos(env, ctx), { headers: NO_STORE });
     }
 
     // Complete
-    const m = path.match(/^\/api\/todos\/(\d+)\/complete$/);
+    const m = path.match(/^\/api\/todos\/([^/]+)\/complete$/);
     if (m) {
       if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
-      const id = Number(m[1]);
-      const res = await env.DB.prepare("UPDATE todos SET done = 1 WHERE id = ?").bind(id).run();
-      if (!res.meta.changes) {
-        return Response.json({ error: `no todo with id ${id}` }, { status: 404, headers: NO_STORE });
+      const id = decodeURIComponent(m[1]);
+      try {
+        await getProvider(env).complete(id);
+      } catch (err) {
+        const status = errStatus(err);
+        return Response.json({ error: errMessage(err) }, { status, headers: NO_STORE });
       }
-      const row = await env.DB.prepare(
-        "SELECT id, text, done FROM todos WHERE id = ?"
-      ).bind(id).first<TodoRow>();
-      return Response.json({ id: row!.id, text: row!.text, done: !!row!.done }, { headers: NO_STORE });
+      invalidateTodos(ctx); // reflect the completion on the next poll
+      return Response.json({ id, done: true }, { headers: NO_STORE });
     }
 
     return new Response("Not Found", { status: 404, headers: NO_STORE });
   },
 } satisfies ExportedHandler<Env>;
+
+function errStatus(err: unknown): number {
+  if (typeof err === "object" && err !== null && "status" in err) {
+    const s = Number((err as { status: unknown }).status);
+    if (s >= 400 && s < 600) return s;
+  }
+  return 502; // backend/provider failure
+}
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Unknown error";
+}

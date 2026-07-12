@@ -1,0 +1,19 @@
+# Local dev secrets for `wrangler dev`.
+#
+# Copy this file to `.dev.vars` and fill in real test values. `.dev.vars` is
+# git-ignored so your credentials never get committed. These values are only
+# used locally; for deployed Workers set the same names with `wrangler secret put`.
+
+# Access token gating every route (the Kindle and the page pass it as ?t=...).
+TODO_TOKEN="choose-a-long-random-string"
+
+# Azure app registration (same as the Python CLI's keys.yml)
+MS_CLIENT_ID="00000000-0000-0000-0000-000000000000"
+MS_CLIENT_SECRET="your-client-secret"
+
+# A refresh token obtained once via an interactive OAuth login.
+MS_REFRESH_TOKEN="0.AXoA...your-refresh-token"
+
+# The To Do list to display. Find its id by listing your lists (see README /
+# the ms_find helper), then paste it here.
+MS_DEFAULT_LIST_ID=""

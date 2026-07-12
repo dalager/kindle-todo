@@ -7,15 +7,10 @@
  */
 import React from "react";
 import { ImageResponse, GoogleFont, cache } from "@cf-wasm/og/workerd";
+import type { Todo } from "./providers/types";
 
 export const KINDLE_W = 1072;
 export const KINDLE_H = 1448;
-
-export interface Todo {
-  id: number;
-  text: string;
-  done: boolean;
-}
 
 export function renderTodoPng(todos: Todo[], ctx: ExecutionContext): Promise<Response> {
   // Lets the library reuse fetched fonts across requests.

@@ -3,13 +3,18 @@
   "name": "kindletodo",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
-  "observability": { "enabled": true },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "kindletodo",
-      "database_id": "eafff368-b8a6-4108-9361-f28c4082ecdf",
-      "migrations_dir": "migrations"
-    }
-  ]
+  "observability": { "enabled": true }
+
+  // Secrets (set with `wrangler secret put <NAME>`; kept in .dev.vars for local dev):
+  //   TODO_TOKEN          - access token gating every route (?t=...)
+  //   MS_CLIENT_ID        - Azure app id
+  //   MS_CLIENT_SECRET    - Azure app secret
+  //   MS_REFRESH_TOKEN    - Microsoft refresh token (obtained once)
+  //   MS_DEFAULT_LIST_ID  - the To Do list to display
+  //
+  // Optional: persist Microsoft's rotating refresh token across cold starts.
+  // Create it (`wrangler kv namespace create MS_TOKEN_STORE`) then uncomment:
+  // "kv_namespaces": [
+  //   { "binding": "MS_TOKEN_STORE", "id": "<your-kv-namespace-id>" }
+  // ]
 }

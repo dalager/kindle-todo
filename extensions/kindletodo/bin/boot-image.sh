@@ -29,4 +29,7 @@ sleep 3   # let the last framebuffer write flush
 # Keep the panel awake (powerd runs independently of the GUI).
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 
+# Frontlight brightness (0 = off, 24 = max). Adjust to taste.
+lipc-set-prop com.lab126.powerd flIntensity 5 2>/dev/null
+
 exec /bin/sh /mnt/us/extensions/kindletodo/bin/image-loop.sh "$URL" "$INTERVAL"

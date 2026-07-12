@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todo</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: #000000;
+    font-family: Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 {
+    font-size: 28px;
+    margin: 0;
+    padding: 16px 20px;
+    border-bottom: 3px solid #000000;
+  }
+  #list { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: block;
+    border-bottom: 2px solid #000000;
+    padding: 18px 20px;
+    min-height: 64px;
+    overflow: hidden;
+  }
+  .txt {
+    font-size: 24px;
+    line-height: 48px;
+    float: left;
+    max-width: 62%;
+  }
+  li.done .txt { text-decoration: line-through; color: #888888; }
+  button.complete {
+    float: right;
+    font-size: 22px;
+    font-weight: bold;
+    padding: 0 24px;
+    height: 48px;
+    line-height: 44px;
+    background: #ffffff;
+    color: #000000;
+    border: 3px solid #000000;
+    -webkit-appearance: none;
+    border-radius: 0;
+  }
+  button.complete:active { background: #000000; color: #ffffff; }
+  li.done button.complete { display: none; }
+  #msg { padding: 16px 20px; font-size: 20px; color: #444444; }
+  #empty { padding: 24px 20px; font-size: 22px; }
+</style>
+</head>
+<body>
+  <h1>Todo</h1>
+  <ul id="list"></ul>
+  <div id="msg"></div>
+
+<script type="text/javascript">
+/* ES5 only + XMLHttpRequest: the Kindle Voyage browser is old WebKit. */
+(function () {
+  var listEl = document.getElementById("list");
+  var msgEl = document.getElementById("msg");
+
+  function setMsg(t) { msgEl.innerHTML = ""; msgEl.appendChild(document.createTextNode(t || "")); }
+
+  function xhr(method, url, cb) {
+    var r = new XMLHttpRequest();
+    r.open(method, url, true);
+    r.onreadystatechange = function () {
+      if (r.readyState === 4) { cb(r.status, r.responseText); }
+    };
+    r.send(null);
+  }
+
+  function render(todos) {
+    listEl.innerHTML = "";
+    var visible = 0;
+    for (var i = 0; i < todos.length; i++) {
+      var t = todos[i];
+      if (t.done) { continue; }
+      visible++;
+
+      var li = document.createElement("li");
+      li.id = "todo-" + t.id;
+
+      var span = document.createElement("span");
+      span.className = "txt";
+      span.appendChild(document.createTextNode(t.text));
+
+      var btn = document.createElement("button");
+      btn.className = "complete";
+      btn.appendChild(document.createTextNode("Complete"));
+      btn.setAttribute("data-id", String(t.id));
+      btn.onclick = makeHandler(t.id, li);
+
+      li.appendChild(span);
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    }
+    if (visible === 0) {
+      var d = document.createElement("li");
+      d.id = "empty";
+      d.appendChild(document.createTextNode("All done."));
+      listEl.appendChild(d);
+    }
+  }
+
+  function makeHandler(id, li) {
+    return function () {
+      li.className = "done";
+      xhr("POST", "/api/todos/" + id + "/complete", function (status) {
+        if (status < 200 || status >= 300) {
+          li.className = "";
+          setMsg("Could not complete #" + id + " (status " + status + "). Tap again.");
+        } else {
+          setMsg("");
+        }
+      });
+    };
+  }
+
+  function load() {
+    setMsg("Loading...");
+    xhr("GET", "/api/todos", function (status, body) {
+      if (status !== 200) { setMsg("Could not load todos (status " + status + ")."); return; }
+      var todos;
+      try { todos = JSON.parse(body); } catch (e) { setMsg("Bad data from server."); return; }
+      setMsg("");
+      render(todos);
+    });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

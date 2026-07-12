@@ -1,0 +1,16 @@
+{
+	"items": [
+	{
+		"name": "Kindle Todo",
+		"priority": 0,
+		"items": [
+		{
+			"name": "Open Todo Display",
+			"priority": 1,
+			"action": "bin/launch.sh",
+			"exitmenu": true
+		}
+		]
+	}
+	]
+}

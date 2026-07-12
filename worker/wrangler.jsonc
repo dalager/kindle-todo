@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kindletodo",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kindletodo",
+      "database_id": "eafff368-b8a6-4108-9361-f28c4082ecdf",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

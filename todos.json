@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "text": "Take out recycling",
+    "done": true
+  },
+  {
+    "id": 2,
+    "text": "Water the plants",
+    "done": false
+  },
+  {
+    "id": 3,
+    "text": "Reply to landlord",
+    "done": true
+  }
+]

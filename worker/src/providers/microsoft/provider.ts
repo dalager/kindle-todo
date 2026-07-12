@@ -21,6 +21,8 @@ export interface MicrosoftProviderConfig {
 export class MicrosoftTodoProvider implements TodoProvider {
   private readonly client: MicrosoftTodoClient;
   private readonly listId: string;
+  /** The list name is stable; resolve it once per isolate. */
+  private cachedTitle?: string;
 
   constructor(config: MicrosoftProviderConfig) {
     this.client = new MicrosoftTodoClient({
@@ -30,6 +32,10 @@ export class MicrosoftTodoProvider implements TodoProvider {
       tokenStore: config.tokenStore,
     });
     this.listId = config.listId;
+  }
+
+  async title(): Promise<string> {
+    return (this.cachedTitle ??= await this.client.getListName(this.listId));
   }
 
   /** Open tasks in the configured list, newest-relevant order from Graph. */

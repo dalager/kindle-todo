@@ -12,7 +12,7 @@ import type { Todo } from "./providers/types";
 export const KINDLE_W = 1072;
 export const KINDLE_H = 1448;
 
-export function renderTodoPng(todos: Todo[], ctx: ExecutionContext): Promise<Response> {
+export function renderTodoPng(todos: Todo[], title: string, ctx: ExecutionContext): Promise<Response> {
   // Lets the library reuse fetched fonts across requests.
   cache.setExecutionContext(ctx);
 
@@ -39,7 +39,7 @@ export function renderTodoPng(todos: Todo[], ctx: ExecutionContext): Promise<Res
           borderBottom: "6px solid #000000",
         }}
       >
-        Todo
+        {title || "Todo"}
       </div>
 
       {pending.length === 0 ? (

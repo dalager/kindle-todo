@@ -51,6 +51,13 @@ export class MicrosoftTodoClient {
     return data.value.map(mapList);
   }
 
+  /** Display name of a single list. `GET /me/todo/lists/{id}`. */
+  async getListName(listId: string): Promise<string> {
+    const url = `${BASE_URL}/${encodeURIComponent(listId)}`;
+    const data = await this.request<RawTodoList>("GET", url);
+    return data.displayName;
+  }
+
   /**
    * List tasks in a list by list id. Port of `get_tasks(list_id=...)`.
    *

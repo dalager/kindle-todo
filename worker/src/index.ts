@@ -36,33 +36,42 @@ function getProvider(env: Env) {
   return (providerSingleton ??= createProvider(env));
 }
 
-/** Provider list, served from the edge cache when fresh to limit API calls. */
-async function getTodos(env: Env, ctx: ExecutionContext): Promise<Todo[]> {
+/** The header title plus the tasks to show. */
+interface TodoData {
+  title: string;
+  todos: Todo[];
+}
+
+/** Provider data, served from the edge cache when fresh to limit API calls. */
+async function getData(env: Env, ctx: ExecutionContext): Promise<TodoData> {
   const cache = caches.default;
   const key = new Request(LIST_CACHE_KEY);
   const hit = await cache.match(key);
-  if (hit) return (await hit.json()) as Todo[];
+  if (hit) return (await hit.json()) as TodoData;
 
-  const todos = await getProvider(env).list();
+  const provider = getProvider(env);
+  const [title, todos] = await Promise.all([provider.title(), provider.list()]);
+  const data: TodoData = { title, todos };
   ctx.waitUntil(
     cache.put(
       key,
-      new Response(JSON.stringify(todos), {
+      new Response(JSON.stringify(data), {
         headers: { "Content-Type": "application/json", "Cache-Control": `max-age=${LIST_CACHE_TTL}` },
       }),
     ),
   );
-  return todos;
+  return data;
 }
 
 function invalidateTodos(ctx: ExecutionContext): void {
   ctx.waitUntil(caches.default.delete(new Request(LIST_CACHE_KEY)));
 }
 
-// ETag = strong hash of the exact state that determines the rendered image.
-async function etagFor(todos: Todo[]): Promise<string> {
-  const data = new TextEncoder().encode(JSON.stringify(todos));
-  const digest = await crypto.subtle.digest("SHA-256", data);
+// ETag = strong hash of the exact state that determines the rendered image
+// (title + tasks), so a list rename or task change flips it.
+async function etagFor(data: TodoData): Promise<string> {
+  const raw = new TextEncoder().encode(JSON.stringify(data));
+  const digest = await crypto.subtle.digest("SHA-256", raw);
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `"${hex}"`;
 }
@@ -97,14 +106,17 @@ const HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <h1>Todo</h1>
+  <h1 id="title">Todo</h1>
   <ul id="list"></ul>
   <div id="msg"></div>
 <script type="text/javascript">
 (function () {
+  var titleEl = document.getElementById("title");
   var listEl = document.getElementById("list");
   var msgEl = document.getElementById("msg");
   var Q = location.search; // carries ?t=<token>; reused on every API call
+
+  function setTitle(t) { titleEl.innerHTML = ""; titleEl.appendChild(document.createTextNode(t || "Todo")); }
 
   function setMsg(t) { msgEl.innerHTML = ""; msgEl.appendChild(document.createTextNode(t || "")); }
   function xhr(method, url, cb) {
@@ -151,9 +163,9 @@ const HTML = `<!DOCTYPE html>
     setMsg("Loading...");
     xhr("GET", "/api/todos" + Q, function (status, body) {
       if (status !== 200) { setMsg("Could not load todos (status " + status + ")."); return; }
-      var todos;
-      try { todos = JSON.parse(body); } catch (e) { setMsg("Bad data from server."); return; }
-      setMsg(""); render(todos);
+      var data;
+      try { data = JSON.parse(body); } catch (e) { setMsg("Bad data from server."); return; }
+      setMsg(""); setTitle(data.title); render(data.todos || []);
     });
   }
   load();
@@ -180,8 +192,8 @@ export default {
 
     // Full-screen PNG for the Kindle's non-interactive (image) mode.
     if (request.method === "GET" && path === "/todo.png") {
-      const todos = await getTodos(env, ctx);
-      const etag = await etagFor(todos);
+      const data = await getData(env, ctx);
+      const etag = await etagFor(data);
 
       if (request.headers.get("If-None-Match") === etag) {
         return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-cache" } });
@@ -194,7 +206,7 @@ export default {
       if (hit) {
         body = await hit.arrayBuffer();
       } else {
-        const rendered = await renderTodoPng(todos, ctx);
+        const rendered = await renderTodoPng(data.todos, data.title, ctx);
         body = await rendered.arrayBuffer();
         ctx.waitUntil(
           cache.put(
@@ -210,10 +222,10 @@ export default {
       });
     }
 
-    // List
+    // List (returns { title, todos })
     if (path === "/api/todos") {
       if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
-      return Response.json(await getTodos(env, ctx), { headers: NO_STORE });
+      return Response.json(await getData(env, ctx), { headers: NO_STORE });
     }
 
     // Complete

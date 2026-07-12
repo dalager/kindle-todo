@@ -13,6 +13,8 @@ export interface Todo {
 }
 
 export interface TodoProvider {
+  /** Display title of the list (e.g. the To Do list name). Used as the header. */
+  title(): Promise<string>;
   /** The tasks to display (open/pending tasks). */
   list(): Promise<Todo[]>;
   /** Mark a task complete by its id. */

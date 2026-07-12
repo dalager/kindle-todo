@@ -5,9 +5,9 @@
 		"priority": 0,
 		"items": [
 		{
-			"name": "Open Todo Display",
+			"name": "Start Todo Display (image mode)",
 			"priority": 1,
-			"action": "bin/launch.sh",
+			"action": "bin/boot-image.sh",
 			"exitmenu": true
 		}
 		]

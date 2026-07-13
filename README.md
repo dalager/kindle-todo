@@ -78,8 +78,11 @@ renderer.
   requests with a tiny `304`, and a Cache API layer means the image is
   rasterized at most once per change. Switching the served list invalidates the
   cache for an immediate refresh.
-- **Access** — every route requires `?t=<TODO_TOKEN>`, a shared secret in the
-  URL (Cloudflare Access would break the unattended kiosk).
+- **Access** — every data route (`/api/*`, `/todo.png`) requires
+  `?t=<TODO_TOKEN>`, a shared secret in the URL (Cloudflare Access would break
+  the unattended kiosk). The page shell at `/` is public and holds no data; it
+  reads the token from the URL, else `localStorage`, else a prompt, then reuses
+  it on the API calls.
 
 ### The Kindle (`extensions/kindletodo/`)
 
@@ -166,7 +169,7 @@ wrangler login
 for k in TODO_TOKEN MS_CLIENT_ID MS_CLIENT_SECRET MS_REFRESH_TOKEN MS_DEFAULT_LIST_ID; do
   printf '%s' "$(grep "^$k=" .dev.vars | cut -d= -f2- | tr -d '"')" | wrangler secret put "$k"
 done
-wrangler deploy        # -> https://<name>.<subdomain>.workers.dev
+wrangler deploy        # -> custom domain (todo.dalagerlabs.com) + workers.dev URL
 ```
 
 **Finding your list id:** list your To Do lists via the Graph explorer
@@ -185,7 +188,7 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 1. **Install the extension.** Mount the Kindle over USB and copy
    `extensions/kindletodo/` to `/mnt/us/extensions/kindletodo/`. Edit
    `bin/boot-image.sh`:
-   - `URL=` → your `https://…workers.dev/todo.png?t=<TODO_TOKEN>`
+   - `URL=` → your `https://todo.dalagerlabs.com/todo.png?t=<TODO_TOKEN>`
    - `INTERVAL=` → poll seconds (15 is a good default)
    - `flIntensity` → frontlight 0 (off) … 24 (max)
 
@@ -215,7 +218,7 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 ## Using it
 
 - **See it:** the Kindle shows the list; it redraws within ~15 s of a change.
-- **Choose the list:** open `https://<name>.<subdomain>.workers.dev/?t=<TODO_TOKEN>`
+- **Choose the list:** open `https://todo.dalagerlabs.com/?t=<TODO_TOKEN>`
   on any device and pick which To Do list the Kindle serves; the wall follows on
   its next poll.
 - **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.
@@ -232,7 +235,8 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
   screensaver running under `x`; while charging it paints the battery graphic
   over the image. Stop the whole **`x`** job (as `boot-image.sh` does).
 - **HTTPS on the old browser:** the Kindle's `curl`/OpenSSL do modern TLS fine,
-  so it reaches `workers.dev` over HTTPS without trouble.
+  so it reaches the Cloudflare edge (custom domain or `workers.dev`) over HTTPS
+  without trouble.
 - **Blinking:** e-ink redraws flash, so the loop redraws **only on change**.
 - **Security:** the access token lives in `boot-image.sh` on the device and, if
   you commit it, in the repo — keep the repo private and rotate the token / MS

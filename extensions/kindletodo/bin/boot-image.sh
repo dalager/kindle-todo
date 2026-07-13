@@ -11,7 +11,7 @@
 # Revert to a normal Kindle: remove /etc/upstart/kindletodo.conf and `start x`
 # (or just reboot after removing).
 
-URL="https://kindletodo.christian-b8a.workers.dev/todo.png?t=QKycWamyZC8vRdYsnYKA1v7u"
+URL="https://todo.dalagerlabs.com/todo.png?t=QKycWamyZC8vRdYsnYKA1v7u"
 INTERVAL=15
 
 # Let boot + Wi-Fi settle (Wi-Fi associates during startup).

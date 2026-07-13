@@ -9,8 +9,9 @@
  * config default (MS_DEFAULT_LIST_ID) is preselected, and the chosen list id is
  * persisted in KV (LIST_STORE) so the Kindle's independent polling picks it up.
  *
- * Routes (all require a valid ?t=<TODO_TOKEN>):
- *   GET  /                -> HTML page (list picker + tasks)
+ * Routes (all except GET / require a valid ?t=<TODO_TOKEN>):
+ *   GET  /                -> HTML page (public shell; prompts for the token and
+ *                            remembers it in localStorage)
  *   GET  /api/lists       -> { lists: [{ id, name }], selected }
  *   POST /api/selection   -> set the served list (?list=<id>); { selected }
  *   GET  /api/todos       -> { title, todos }
@@ -138,7 +139,29 @@ const HTML = `<!DOCTYPE html>
   var listEl = document.getElementById("list");
   var msgEl = document.getElementById("msg");
   var selectEl = document.getElementById("list-select");
-  var Q = location.search; // carries ?t=<token>; reused on every API call
+
+  // Token: from ?t= in the URL, else localStorage, else prompt the user.
+  // Stored in localStorage so return visits don't need it in the URL.
+  var TOKEN = "";
+  var Q = "";
+  function readUrlToken() { var m = location.search.match(/[?&]t=([^&]*)/); return m ? decodeURIComponent(m[1]) : ""; }
+  function storedToken() { try { return localStorage.getItem("todo_token") || ""; } catch (e) { return ""; } }
+  function setToken(t) {
+    TOKEN = t; Q = "?t=" + encodeURIComponent(t);
+    try { if (t) { localStorage.setItem("todo_token", t); } } catch (e) {}
+  }
+  function promptToken(label) {
+    var t = window.prompt(label);
+    return t ? t.replace(/^\\s+|\\s+$/g, "") : "";
+  }
+  // Called when the server rejects the token (401): forget it and ask again.
+  function reauth() {
+    try { localStorage.removeItem("todo_token"); } catch (e) {}
+    var t = promptToken("Access token rejected. Enter access token:");
+    if (!t) { setMsg("Access token required. Reload to try again."); return false; }
+    setToken(t);
+    return true;
+  }
 
   function setTitle(t) { titleEl.innerHTML = ""; titleEl.appendChild(document.createTextNode(t || "Todo")); }
   function setMsg(t) { msgEl.innerHTML = ""; msgEl.appendChild(document.createTextNode(t || "")); }
@@ -167,25 +190,31 @@ const HTML = `<!DOCTYPE html>
       listEl.appendChild(d);
     }
   }
-  function loadLists() {
+  function loadLists(next) {
     xhr("GET", "/api/lists" + Q, function (status, body) {
-      if (status !== 200) { return; }
-      var data;
-      try { data = JSON.parse(body); } catch (e) { return; }
-      var lists = data.lists || [];
-      selectEl.innerHTML = "";
-      for (var i = 0; i < lists.length; i++) {
-        var opt = document.createElement("option");
-        opt.value = lists[i].id;
-        opt.appendChild(document.createTextNode(lists[i].name));
-        if (lists[i].id === data.selected) { opt.selected = true; }
-        selectEl.appendChild(opt);
+      if (status === 401) { if (reauth()) { loadLists(next); } return; }
+      if (status === 200) {
+        var data;
+        try { data = JSON.parse(body); } catch (e) { data = null; }
+        if (data) {
+          var lists = data.lists || [];
+          selectEl.innerHTML = "";
+          for (var i = 0; i < lists.length; i++) {
+            var opt = document.createElement("option");
+            opt.value = lists[i].id;
+            opt.appendChild(document.createTextNode(lists[i].name));
+            if (lists[i].id === data.selected) { opt.selected = true; }
+            selectEl.appendChild(opt);
+          }
+        }
       }
+      if (next) { next(); }
     });
   }
   function loadTodos() {
     setMsg("Loading...");
     xhr("GET", "/api/todos" + Q, function (status, body) {
+      if (status === 401) { if (reauth()) { loadTodos(); } return; }
       if (status !== 200) { setMsg("Could not load todos (status " + status + ")."); return; }
       var data;
       try { data = JSON.parse(body); } catch (e) { setMsg("Bad data from server."); return; }
@@ -198,12 +227,20 @@ const HTML = `<!DOCTYPE html>
     selectEl.disabled = true;
     xhr("POST", "/api/selection" + Q + "&list=" + encodeURIComponent(id), function (status) {
       selectEl.disabled = false;
+      if (status === 401) { if (reauth()) { selectEl.onchange(); } return; }
       if (status < 200 || status >= 300) { setMsg("Could not switch list (status " + status + ")."); return; }
       loadTodos();
     });
   };
-  loadLists();
-  loadTodos();
+
+  var initial = readUrlToken() || storedToken();
+  if (!initial) { initial = promptToken("Enter access token:"); }
+  if (initial) {
+    setToken(initial);
+    loadLists(function () { loadTodos(); }); // sequential: one request in flight
+  } else {
+    setMsg("Access token required. Reload to try again.");
+  }
 })();
 </script>
 </body>
@@ -214,15 +251,17 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (!authorized(url, env)) {
-      return new Response("Unauthorized", { status: 401, headers: NO_STORE });
-    }
-
-    // Page
+    // Page shell is static (no secrets). Serve it without a token so the page
+    // itself can prompt for one and remember it; the API routes below still
+    // require ?t=<TODO_TOKEN>.
     if (request.method === "GET" && (path === "/" || path === "/index.html")) {
       return new Response(HTML, {
         headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE },
       });
+    }
+
+    if (!authorized(url, env)) {
+      return new Response("Unauthorized", { status: 401, headers: NO_STORE });
     }
 
     // Available lists + which one is currently served.

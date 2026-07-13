@@ -6,6 +6,8 @@
 	"observability": {
 		"enabled": true
 	},
+	// Custom domain the Kindle and phones hit (also on the account workers.dev URL).
+	"routes": [{ "pattern": "todo.dalagerlabs.com", "custom_domain": true }],
 	// LIST_STORE persists which list the web page picked to serve to the Kindle.
 	// Without it the picker can read lists but cannot save a choice (POST
 	// /api/selection returns 501) and the Kindle always shows MS_DEFAULT_LIST_ID.

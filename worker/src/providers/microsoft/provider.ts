@@ -6,7 +6,7 @@
  */
 import { MicrosoftTodoClient } from "./client";
 import { kvTokenStore, type TokenStore } from "./auth";
-import type { Todo, TodoProvider } from "../types";
+import type { Todo, TodoListInfo, TodoProvider } from "../types";
 
 export interface MicrosoftProviderConfig {
   clientId: string;
@@ -20,9 +20,9 @@ export interface MicrosoftProviderConfig {
 
 export class MicrosoftTodoProvider implements TodoProvider {
   private readonly client: MicrosoftTodoClient;
-  private readonly listId: string;
-  /** The list name is stable; resolve it once per isolate. */
-  private cachedTitle?: string;
+  readonly defaultListId: string;
+  /** List names are stable; resolve each once per isolate, keyed by list id. */
+  private readonly titleCache = new Map<string, string>();
 
   constructor(config: MicrosoftProviderConfig) {
     this.client = new MicrosoftTodoClient({
@@ -31,25 +31,30 @@ export class MicrosoftTodoProvider implements TodoProvider {
       refreshToken: config.refreshToken,
       tokenStore: config.tokenStore,
     });
-    this.listId = config.listId;
+    this.defaultListId = config.listId;
   }
 
-  async title(): Promise<string> {
-    return (this.cachedTitle ??= await this.client.getListName(this.listId));
+  async lists(): Promise<TodoListInfo[]> {
+    const lists = await this.client.listLists();
+    return lists.map((l) => ({ id: l.id, name: l.displayName }));
   }
 
-  /** Open tasks in the configured list, newest-relevant order from Graph. */
-  async list(): Promise<Todo[]> {
-    const tasks = await this.client.listTasks(this.listId); // open tasks only
+  async title(listId: string = this.defaultListId): Promise<string> {
+    const cached = this.titleCache.get(listId);
+    if (cached !== undefined) return cached;
+    const name = await this.client.getListName(listId);
+    this.titleCache.set(listId, name);
+    return name;
+  }
+
+  /** Open tasks in the given list, newest-relevant order from Graph. */
+  async list(listId: string = this.defaultListId): Promise<Todo[]> {
+    const tasks = await this.client.listTasks(listId); // open tasks only
     return tasks.map((t) => ({
       id: t.id,
       text: t.title,
       done: t.status === "completed",
     }));
-  }
-
-  async complete(id: string): Promise<void> {
-    await this.client.completeTask(this.listId, id);
   }
 }
 

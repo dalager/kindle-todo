@@ -12,11 +12,21 @@ export interface Todo {
   done: boolean;
 }
 
+/** A selectable list, for the web page's list picker. */
+export interface TodoListInfo {
+  /** Opaque list id, unique within the provider. */
+  id: string;
+  /** Display name shown in the picker. */
+  name: string;
+}
+
 export interface TodoProvider {
-  /** Display title of the list (e.g. the To Do list name). Used as the header. */
-  title(): Promise<string>;
-  /** The tasks to display (open/pending tasks). */
-  list(): Promise<Todo[]>;
-  /** Mark a task complete by its id. */
-  complete(id: string): Promise<void>;
+  /** The provider's configured default list id (preselected in the picker). */
+  readonly defaultListId: string;
+  /** All available lists, for the picker. */
+  lists(): Promise<TodoListInfo[]>;
+  /** Display title of a list (defaults to the configured list). Used as the header. */
+  title(listId?: string): Promise<string>;
+  /** The tasks to display (open/pending tasks) for a list (defaults to configured). */
+  list(listId?: string): Promise<Todo[]>;
 }

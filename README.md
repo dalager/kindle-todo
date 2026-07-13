@@ -35,16 +35,17 @@ the Kindle becomes a thin client that just fetches an image and draws it.
   │    └ MicrosoftTodoProvider (Graph client) │   (MS To Do today)
   │                                           │
   │  Routes (all gated by ?t=<TODO_TOKEN>):   │
-  │   GET  /              interactive page    │
-  │   GET  /api/todos     { title, todos }    │
-  │   POST /api/todos/:id/complete            │
+  │   GET  /              picker + tasks       │
+  │   GET  /api/lists     { lists, selected }  │
+  │   POST /api/selection ?list=<id>           │
+  │   GET  /api/todos     { title, todos }     │
   │   GET  /todo.png      1072×1448 PNG        │   satori + resvg, no browser
   │                                           │
-  │  list cached ~30s · /todo.png ETag/304    │   cheap polling
+  │  served list in KV · cached ~30s · ETag   │   cheap polling
   └──────────────────────────────────────────┘
           ▲ HTTPS                    ▲ HTTPS
-          │ curl (poll + redraw      │ tap "Complete"
-          │       only on change)    │
+          │ curl (poll + redraw      │ pick which list
+          │       only on change)    │ to serve
   ┌───────────────────┐      ┌───────────────────┐
   │ Kindle (kiosk)    │      │ Any phone/browser │
   │  boot-image.sh    │      │  the page at /    │
@@ -60,19 +61,23 @@ TypeScript, deployed to Cloudflare. Zero runtime dependencies beyond the PNG
 renderer.
 
 - **Provider abstraction** (`src/providers/`) — the app depends on a small
-  `TodoProvider` interface (`title()`, `list()`, `complete(id)`); a `factory`
-  picks the implementation from config. Microsoft To Do
+  `TodoProvider` interface (`lists()`, `title(listId?)`, `list(listId?)`); a
+  `factory` picks the implementation from config. Microsoft To Do
   (`providers/microsoft/`) is the only backend today, wrapping a ported,
   zero-dependency Microsoft Graph client (refresh-token grant). Adding another
   source is a new class + one line in the factory.
+- **List picker** — the web page lists every To Do list and lets you choose
+  which one is served to the Kindle. The choice is persisted in the `LIST_STORE`
+  KV namespace (falling back to `MS_DEFAULT_LIST_ID`), so the Kindle's next poll
+  picks it up. Tasks are completed in the upstream To Do app, not here.
 - **`/todo.png`** — the list rendered to a 1072×1448 grayscale PNG using
   [`@cf-wasm/og`](https://github.com/fineshopdesign/cf-wasm) (satori + resvg) —
   **no headless browser**, so it's fast and free.
 - **Efficiency** — the provider list is cached ~30s (so the Kindle's 15s polling
   doesn't hammer Graph); `/todo.png` returns an `ETag` and answers conditional
   requests with a tiny `304`, and a Cache API layer means the image is
-  rasterized at most once per change. Completing a task invalidates the cache
-  for an immediate refresh.
+  rasterized at most once per change. Switching the served list invalidates the
+  cache for an immediate refresh.
 - **Access** — every route requires `?t=<TODO_TOKEN>`, a shared secret in the
   URL (Cloudflare Access would break the unattended kiosk).
 
@@ -100,7 +105,7 @@ logic lives in the Worker, so changing the look is a redeploy — no device acce
 ```
 worker/                         Cloudflare Worker
   src/
-    index.ts                    routes: page, /api/todos, /todo.png
+    index.ts                    routes: page, /api/lists, /api/selection, /api/todos, /todo.png
     og.tsx                      PNG render (satori/resvg)
     providers/
       types.ts                  TodoProvider interface + Todo type
@@ -210,9 +215,10 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 ## Using it
 
 - **See it:** the Kindle shows the list; it redraws within ~15 s of a change.
-- **Tick items off:** open `https://<name>.<subdomain>.workers.dev/?t=<TODO_TOKEN>`
-  on any device and tap **Complete**, or complete tasks in Microsoft To Do
-  itself — either way the wall follows.
+- **Choose the list:** open `https://<name>.<subdomain>.workers.dev/?t=<TODO_TOKEN>`
+  on any device and pick which To Do list the Kindle serves; the wall follows on
+  its next poll.
+- **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.
 - **Change the look:** edit `worker/src/og.tsx` and `wrangler deploy`. No device
   access needed; the Kindle picks it up on its next poll.
 - **Adjust brightness live:** `ssh root@<kindle-ip>` then

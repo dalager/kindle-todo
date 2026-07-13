@@ -1,20 +1,28 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "kindletodo",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-07-01",
-  "observability": { "enabled": true }
-
-  // Secrets (set with `wrangler secret put <NAME>`; kept in .dev.vars for local dev):
-  //   TODO_TOKEN          - access token gating every route (?t=...)
-  //   MS_CLIENT_ID        - Azure app id
-  //   MS_CLIENT_SECRET    - Azure app secret
-  //   MS_REFRESH_TOKEN    - Microsoft refresh token (obtained once)
-  //   MS_DEFAULT_LIST_ID  - the To Do list to display
-  //
-  // Optional: persist Microsoft's rotating refresh token across cold starts.
-  // Create it (`wrangler kv namespace create MS_TOKEN_STORE`) then uncomment:
-  // "kv_namespaces": [
-  //   { "binding": "MS_TOKEN_STORE", "id": "<your-kv-namespace-id>" }
-  // ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "kindletodo",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-01",
+	"observability": {
+		"enabled": true
+	},
+	// LIST_STORE persists which list the web page picked to serve to the Kindle.
+	// Without it the picker can read lists but cannot save a choice (POST
+	// /api/selection returns 501) and the Kindle always shows MS_DEFAULT_LIST_ID.
+	// Create it (`wrangler kv namespace create LIST_STORE`) and set the id below.
+	"kv_namespaces": [
+		{
+			"binding": "LIST_STORE",
+			"id": "c70188ef89424773ae5b6d046a304bd2"
+		}
+		// Optional: persist Microsoft's rotating refresh token across cold starts.
+		// Create it (`wrangler kv namespace create MS_TOKEN_STORE`) then uncomment:
+		// { "binding": "MS_TOKEN_STORE", "id": "<your-kv-namespace-id>" }
+	]
+	// Secrets (set with `wrangler secret put <NAME>`; kept in .dev.vars for local dev):
+	//   TODO_TOKEN          - access token gating every route (?t=...)
+	//   MS_CLIENT_ID        - Azure app id
+	//   MS_CLIENT_SECRET    - Azure app secret
+	//   MS_REFRESH_TOKEN    - Microsoft refresh token (obtained once)
+	//   MS_DEFAULT_LIST_ID  - the default To Do list (preselected in the picker)
 }

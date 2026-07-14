@@ -11,8 +11,9 @@
 
 /** Screens the Worker renders live when a backend call fails. */
 export type WorkerErrorKind = "backend" | "auth" | "list";
-/** Screens the Kindle draws locally when the Worker itself is unreachable. */
-export type DeviceErrorKind = "nowifi" | "notfound" | "unauthorized" | "server";
+/** Screens the Kindle draws locally when the Worker itself is unreachable
+ * (or, for `battery`, when the device itself needs attention). */
+export type DeviceErrorKind = "nowifi" | "notfound" | "unauthorized" | "server" | "battery";
 export type ErrorKind = WorkerErrorKind | DeviceErrorKind;
 
 export interface ErrorScreen {
@@ -62,6 +63,11 @@ export const ERROR_SCREENS: Record<ErrorKind, ErrorScreen> = {
     title: "Server error",
     body: "The todo Worker hit an error. Retrying…",
   },
+  battery: {
+    emoji: "🔌",
+    title: "Battery low",
+    body: "The charger seems to be off — plug the Kindle back in.",
+  },
 };
 
 /** The device pre-downloads exactly these (the Worker-unreachable set). */
@@ -70,6 +76,7 @@ export const DEVICE_ERROR_KINDS: readonly DeviceErrorKind[] = [
   "notfound",
   "unauthorized",
   "server",
+  "battery",
 ];
 
 /**

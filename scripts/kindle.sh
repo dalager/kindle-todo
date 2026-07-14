@@ -48,7 +48,7 @@ case "$cmd" in
     # unreachable (rendered by the Worker so they match the real look).
     echo "Fetching error screens from $BASE_URL ..."
     ADIR="$(mktemp -d)"
-    for kind in nowifi notfound unauthorized server; do
+    for kind in nowifi notfound unauthorized server battery; do
       if curl -fsS "$BASE_URL/error/$kind.png?t=$TODO_TOKEN" -o "$ADIR/err-$kind.png"; then
         echo "  ok: err-$kind.png"
       else

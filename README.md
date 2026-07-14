@@ -422,6 +422,7 @@ PNG (pre-downloaded by `scripts/kindle.sh deploy`) after ~1 min of failed polls:
 | <img src="docs/errorpages/notfound.png" width="120" alt="Server not found"> | **Server not found** (404) — wrong URL, route disabled, or not deployed. | Check the deploy / the `BASE_URL`. |
 | <img src="docs/errorpages/unauthorized.png" width="120" alt="Access token mismatch"> | **Token mismatch** (401) — the device token ≠ the deployed secret. | Re-run `scripts/kindle.sh deploy`. |
 | <img src="docs/errorpages/server.png" width="120" alt="Server error"> | **Server error** (5xx) — the Worker crashed. | Usually transient; check `wrangler tail` if it persists. |
+| <img src="docs/errorpages/battery.png" width="120" alt="Battery low"> | **Battery low** — discharging below ~20 % (charger off/unplugged). | Restore power; the list returns on the next change. |
 
 > Colors dither to grayscale on the Kindle's e-ink panel; the emoji and text stay
 > perfectly legible. Preview any screen live at `/error/<kind>.png?t=<TODO_TOKEN>`.

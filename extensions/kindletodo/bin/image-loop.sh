@@ -26,6 +26,11 @@ LOG="$DIR/image.log"
 # error screen. At INTERVAL=15s, 4 ≈ one minute of grace.
 FAIL_THRESHOLD="${FAIL_THRESHOLD:-4}"
 
+# Battery telemetry (BD71827 PMIC). If the charger dies the board would drain
+# silently for days and then just go dark — warn on the panel instead.
+BATT=/sys/class/power_supply/bd71827_bat
+BATT_THRESHOLD="${BATT_THRESHOLD:-20}"
+
 # Keep the device awake so the screensaver doesn't paint over our image.
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 
@@ -33,6 +38,8 @@ echo "$(date) image-loop start interval=${INTERVAL}s" >> "$LOG"
 
 state=ok          # ok | nowifi | notfound | unauthorized | server
 fails=0
+batt_warned=0     # battery warning is separate from the network state machine
+iter=0
 
 draw_png() { "$FBINK" -f -W GC16 -g file="$1" >/dev/null 2>&1; }
 draw_text() { "$FBINK" -c -m -y 20 "$1" >/dev/null 2>&1; }  # last-resort if asset missing
@@ -55,6 +62,32 @@ fix_clock() {
   echo "$(date) clock synced from HTTP Date header" >> "$LOG"
 }
 
+# Warn once when discharging below the threshold; when the charger returns,
+# clear the ETag so the next poll returns a body and the list replaces the
+# warning. Also logs an hourly battery trend line.
+check_battery() {
+  [ -r "$BATT/status" ] || return 0
+  bstat=$(cat "$BATT/status" 2>/dev/null)
+  bcap=$(cat "$BATT/capacity" 2>/dev/null || echo 100)
+  iter=$((iter + 1))
+  [ $((iter % 240)) -eq 0 ] && echo "$(date) battery ${bcap}% ${bstat}" >> "$LOG"
+  if [ "$bstat" = "Discharging" ] && [ "$bcap" -lt "$BATT_THRESHOLD" ] 2>/dev/null; then
+    if [ "$batt_warned" = 0 ]; then
+      if [ -f "$ASSETS/err-battery.png" ]; then
+        draw_png "$ASSETS/err-battery.png"
+      else
+        draw_text "Battery low (${bcap}%). Plug the Kindle in."
+      fi
+      batt_warned=1
+      echo "$(date) battery warning drawn (${bcap}%)" >> "$LOG"
+    fi
+  elif [ "$batt_warned" = 1 ]; then
+    batt_warned=0
+    rm -f "$ETAG"  # force a 200 next poll so the list replaces the warning
+    echo "$(date) battery recovered (${bcap}% ${bstat})" >> "$LOG"
+  fi
+}
+
 # Draw an error screen once; do nothing if it's already on screen (no flashing).
 show_error() {
   kind="$1"; msg="$2"
@@ -69,6 +102,8 @@ show_error() {
 }
 
 while true; do
+  check_battery
+
   if [ "$state" = "ok" ]; then
     # Healthy: conditional GET (304 when unchanged).
     code=$(curl -s -o "${PNG}.tmp" -w "%{http_code}" \

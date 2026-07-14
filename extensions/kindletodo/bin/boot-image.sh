@@ -75,4 +75,10 @@ sleep 3
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 lipc-set-prop com.lab126.powerd flIntensity "$FLINTENSITY" 2>/dev/null
 
+# The i.MX6SLL has two P-states (396/996 MHz) and boots pinned to
+# `performance`. The kiosk is one curl + occasional fbink per 15s — 396 MHz
+# is ample (e-ink refresh is EPDC-bound, not CPU-bound). Less heat, and
+# longer battery ride-through during a power cut.
+echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null
+
 exec /bin/sh /mnt/us/extensions/kindletodo/bin/image-loop.sh "$URL" "$INTERVAL"

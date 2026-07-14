@@ -25,7 +25,7 @@ browser is rough, and its UI wants to draw a home screen / screensaver over
 anything you put up. So all the real work happens in a **Cloudflare Worker**, and
 the Kindle becomes a thin client that just fetches an image and draws it.
 
-## Daily usage
+## Daily use
 
 - you do your thing
 - the wall updates
@@ -500,3 +500,7 @@ scripts/kindle.sh deploy                                          # 4. the Kindl
   (satori + resvg).
 - Kindle jailbreak, **fbink**, **KUAL**, **USBNetLite** from the
   [kindlemodding.org](https://kindlemodding.org) / MobileRead communities.
+
+## License
+
+[MIT](LICENSE) © Christian Dalager

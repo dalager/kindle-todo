@@ -23,3 +23,7 @@ extensions/kindletodo/DISABLE
 
 # Device error-screen assets (downloaded at deploy time)
 extensions/kindletodo/assets/
+
+# Local AI-tooling config (ruflo / Claude Code) — not part of the project
+CLAUDE.md
+.mcp.json

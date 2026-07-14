@@ -300,13 +300,20 @@ wrangler login
 for k in TODO_TOKEN MS_CLIENT_ID MS_CLIENT_SECRET MS_REFRESH_TOKEN MS_DEFAULT_LIST_ID; do
   printf '%s' "$(grep "^$k=" .dev.vars | cut -d= -f2- | tr -d '"')" | wrangler secret put "$k"
 done
-wrangler deploy        # -> https://todo.dalagerlabs.com
+wrangler deploy        # -> https://<yourdomain>
 ```
 
-> **Heads-up:** `wrangler.jsonc` declares a `custom_domain` route
-> (`todo.dalagerlabs.com`). Adding a route **disables the `*.workers.dev` URL**
-> unless you also set `"workers_dev": true` — so after this deploy the Worker is
-> reachable *only* at the custom domain. Point the Kindle there (Part B).
+Your `<yourdomain>` can just be the free Cloudflare **`*.workers.dev`** URL you
+get out of the box (e.g. `kindletodo.<your-subdomain>.workers.dev`) — no custom
+domain or DNS needed. A custom domain (as configured in this repo's
+`wrangler.jsonc`) is purely optional.
+
+> **Heads-up:** the checked-in `wrangler.jsonc` declares a `custom_domain` route.
+> If you keep a `custom_domain` route, it **disables the `*.workers.dev` URL**
+> unless you also set `"workers_dev": true` — so the Worker becomes reachable
+> *only* at that custom domain. If you just want the free `workers.dev` URL,
+> **remove the `routes` line** from `wrangler.jsonc`. Either way, point the Kindle
+> at whatever `<yourdomain>` you end up with (Part B).
 
 **Finding your list id:** list your To Do lists via the Graph explorer
 (`GET /me/todo/lists`) or a small script, and copy the `id` of the list you want
@@ -365,7 +372,7 @@ service. See [Resilience & recovery](#resilience--recovery).
 ## Using it
 
 - **See it:** the Kindle shows the list; it redraws within ~15 s of a change.
-- **Choose the list:** open `https://todo.dalagerlabs.com/?t=<TODO_TOKEN>`
+- **Choose the list:** open `https://<yourdomain>/?t=<TODO_TOKEN>`
   on any device and pick which To Do list the Kindle serves; the wall follows on
   its next poll.
 - **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.

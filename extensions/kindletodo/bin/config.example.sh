@@ -15,3 +15,7 @@ TODO_TOKEN="your-token-here"
 
 # Optional: poll interval in seconds (defaults to 15).
 # INTERVAL=15
+
+# Optional: frontlight brightness, 0=off .. 24=max (defaults to 0). e-ink is
+# readable at 0 in a lit room; raise it for a dim hallway.
+# FLINTENSITY=0

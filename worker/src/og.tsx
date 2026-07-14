@@ -8,6 +8,7 @@
 import React from "react";
 import { ImageResponse, GoogleFont, cache } from "@cf-wasm/og/workerd";
 import type { Todo } from "./providers/types";
+import type { ErrorScreen } from "./errors";
 
 export const KINDLE_W = 1072;
 export const KINDLE_H = 1448;
@@ -70,6 +71,49 @@ export function renderTodoPng(todos: Todo[], title: string, ctx: ExecutionContex
     width: KINDLE_W,
     height: KINDLE_H,
     format: "png",
+    fonts: [new GoogleFont("Inter", { weight: 700 })],
+  });
+}
+
+/**
+ * Renders a full-screen, centered error state (big emoji + headline + hint).
+ * Used both live (backend failures) and to pre-bake the device's local
+ * fallbacks. Emoji come from twemoji SVGs, dithered to grayscale on e-ink.
+ */
+export function renderErrorPng(screen: ErrorScreen, ctx: ExecutionContext): Promise<Response> {
+  cache.setExecutionContext(ctx);
+
+  const element = (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        width: "100%",
+        height: "100%",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+        backgroundColor: "#ffffff",
+        color: "#000000",
+        fontFamily: "Inter",
+        padding: "80px",
+      }}
+    >
+      <div style={{ display: "flex", fontSize: 300, lineHeight: 1 }}>{screen.emoji}</div>
+      <div style={{ display: "flex", fontSize: 68, fontWeight: 700, marginTop: 64, textAlign: "center" }}>
+        {screen.title}
+      </div>
+      <div style={{ display: "flex", fontSize: 40, marginTop: 36, color: "#333333", maxWidth: 880, textAlign: "center" }}>
+        {screen.body}
+      </div>
+    </div>
+  );
+
+  return ImageResponse.async(element, {
+    width: KINDLE_W,
+    height: KINDLE_H,
+    format: "png",
+    emoji: "twemoji",
     fonts: [new GoogleFont("Inter", { weight: 700 })],
   });
 }

@@ -3,8 +3,13 @@
 Show a shared **Microsoft To Do** list, full-screen, on a wall-mounted
 **jailbroken Kindle Paperwhite** — a silent, always-on, e-ink family todo board.
 
-The Kindle displays the list; anyone can tick items off from their phone (or
-from Microsoft To Do directly) and the wall updates within seconds.
+The Kindle displays the list; People adds and completes tasks as usual in Microsoft ToDo; The wall updates within seconds.
+
+<p align="center">
+  <img src="docs/screen_todo.jpg" alt="Wall-mounted Kindle Paperwhite showing the Familietodo list" width="380">
+  <br>
+  <sub><em>The real thing: the hallway "Familietodo" on a wall-mounted Kindle.</em></sub>
+</p>
 
 ---
 
@@ -20,40 +25,36 @@ browser is rough, and its UI wants to draw a home screen / screensaver over
 anything you put up. So all the real work happens in a **Cloudflare Worker**, and
 the Kindle becomes a thin client that just fetches an image and draws it.
 
+## Daily usage
+
+- you do your thing
+- the wall updates
+- you use the simple webapp to pick which one of your lists that goes to the kindle
+
 ---
 
 ## Architecture
 
+```mermaid
+graph LR
+    PHONE["📱 Phone / browser<br/>list picker + tasks"]
+    KINDLE["🖼️ Kindle kiosk<br/>curl → fbink (e-ink)"]
+
+    subgraph CF["☁️ Cloudflare"]
+        WORKER["Worker (worker/)<br/>routes · PNG render"]
+        KV[("KV<br/>selected list")]
+    end
+
+    GRAPH["📋 Microsoft To Do<br/>(Graph API)"]
+
+    PHONE -->|"GET / , /api/* · HTTPS ?t="| WORKER
+    KINDLE -->|"poll GET /todo.png · HTTPS ?t="| WORKER
+    WORKER -->|"read / write selected list"| KV
+    WORKER -->|"refresh-token grant · lists · tasks"| GRAPH
 ```
-  Microsoft To Do (Graph API)
-          │  refresh-token grant
-          ▼
-  ┌──────────────────────────────────────────┐
-  │  Cloudflare Worker (worker/)              │
-  │                                           │
-  │  TodoProvider  ◀── factory ◀── env        │   pluggable backend
-  │    └ MicrosoftTodoProvider (Graph client) │   (MS To Do today)
-  │                                           │
-  │  Routes (all gated by ?t=<TODO_TOKEN>):   │
-  │   GET  /              picker + tasks       │
-  │   GET  /api/lists     { lists, selected }  │
-  │   POST /api/selection ?list=<id>           │
-  │   GET  /api/todos     { title, todos }     │
-  │   GET  /todo.png      1072×1448 PNG        │   satori + resvg, no browser
-  │                                           │
-  │  served list in KV · cached ~30s · ETag   │   cheap polling
-  └──────────────────────────────────────────┘
-          ▲ HTTPS                    ▲ HTTPS
-          │ curl (poll + redraw      │ pick which list
-          │       only on change)    │ to serve
-  ┌───────────────────┐      ┌───────────────────┐
-  │ Kindle (kiosk)    │      │ Any phone/browser │
-  │  boot-image.sh    │      │  the page at /    │
-  │   stop X stack    │      └───────────────────┘
-  │   image-loop.sh   │
-  │   curl → fbink    │
-  └───────────────────┘
-```
+
+The Kindle just fetches an image and draws it; the phone picks which list is
+served. All data + rendering logic lives in the Worker.
 
 ### The Worker (`worker/`)
 
@@ -78,11 +79,87 @@ renderer.
   requests with a tiny `304`, and a Cache API layer means the image is
   rasterized at most once per change. Switching the served list invalidates the
   cache for an immediate refresh.
+- **Friendly errors** — when Graph fails, `/todo.png` first keeps serving the
+  **last-known-good** list for a ~5-min grace window (rides out blips), then
+  falls back to a rendered error screen — "sign-in expired 🔑", "list gone 🤔",
+  or "not responding 😵" (`src/errors.ts`). Failures the Worker can't answer at
+  all (no Wi-Fi, wrong URL) are handled on the device instead — see
+  [Resilience & recovery](#resilience--recovery). `GET /error/<kind>.png` renders
+  any screen, which is how the device pre-downloads its local fallbacks.
 - **Access** — every data route (`/api/*`, `/todo.png`) requires
   `?t=<TODO_TOKEN>`, a shared secret in the URL (Cloudflare Access would break
   the unattended kiosk). The page shell at `/` is public and holds no data; it
   reads the token from the URL, else `localStorage`, else a prompt, then reuses
   it on the API calls.
+
+**Inside the Worker** — router, provider, storage (KV + Cache API) and secrets:
+
+```mermaid
+graph TD
+    REQ["HTTPS request<br/>?t=TODO_TOKEN"] --> ROUTER["fetch() router<br/>src/index.ts"]
+    ROUTER --> AUTH{"token valid?<br/>(GET / is public)"}
+    AUTH -- no --> R401["401 Unauthorized"]
+    AUTH -- yes --> ROUTES["route handlers"]
+
+    ROUTES --> OG["og.tsx<br/>PNG render (satori + resvg)"]
+    ROUTES --> FACTORY["createProvider()"]
+    FACTORY --> PROVIDER["MicrosoftTodoProvider"]
+    PROVIDER --> CLIENT["Graph client<br/>+ TokenManager"]
+    CLIENT -->|"Bearer token"| GRAPH["Microsoft Graph API"]
+
+    ROUTES <--> CACHE[("Cache API<br/>list ~30s · PNG by ETag")]
+    ROUTES <--> KVLIST[("KV LIST_STORE<br/>selected list id")]
+    CLIENT <--> KVTOK[("KV MS_TOKEN_STORE<br/>rotating refresh token")]
+
+    subgraph SECRETS["Secrets · wrangler secret put"]
+        S1["TODO_TOKEN"]
+        S2["MS_CLIENT_ID / _SECRET"]
+        S3["MS_REFRESH_TOKEN"]
+        S4["MS_DEFAULT_LIST_ID"]
+    end
+    S1 -.-> ROUTER
+    S2 -.-> CLIENT
+    S3 -.-> CLIENT
+    S4 -.-> FACTORY
+```
+
+**Endpoints in action** — the phone drives the picker while the Kindle polls the
+image independently:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as 📱 Browser
+    participant K as 🖼️ Kindle
+    participant W as Worker
+    participant C as Cache API
+    participant KV as KV LIST_STORE
+    participant G as Graph API
+
+    Note over B,W: Web picker (GET / needs no token)
+    B->>W: GET / (public shell)
+    W-->>B: HTML + JS (reads/stores token)
+    B->>W: GET /api/lists?t=
+    W->>G: list all To Do lists
+    W->>KV: get selected list id
+    W-->>B: { lists, selected }
+    B->>W: POST /api/selection?list=ID&t=
+    W->>G: validate ID is a real list
+    W->>KV: put selected list id
+    W->>C: invalidate cached list
+    W-->>B: { selected }
+    B->>W: GET /api/todos?t=
+    W-->>B: { title, todos }
+
+    Note over K,W: Kindle image poll (~every 15s)
+    K->>W: GET /todo.png?t= (If-None-Match: etag)
+    alt list changed
+        W->>C: cache miss → render + store PNG
+        W-->>K: 200 image/png + ETag
+    else unchanged
+        W-->>K: 304 Not Modified (no redraw)
+    end
+```
 
 ### The Kindle (`extensions/kindletodo/`)
 
@@ -101,6 +178,40 @@ A jailbroken Kindle running a tiny KUAL extension plus an Upstart boot service.
 The Kindle is a dumb display: fetch image, draw, repeat. All appearance and data
 logic lives in the Worker, so changing the look is a redeploy — no device access.
 
+**Boot + poll loop** — Upstart supervises `boot-image.sh`, which takes over the
+panel and hands off to the `image-loop.sh` redraw loop:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Upstart (respawn)
+    participant B as boot-image.sh
+    participant Cfg as config.local
+    participant X as X display stack
+    participant L as image-loop.sh
+    participant W as Worker /todo.png
+    participant FB as fbink (e-ink)
+
+    U->>B: start on boot
+    B->>B: sleep 20 (Wi-Fi settle)
+    B->>X: stop x (lxinit / pillow / blanket)
+    B->>B: wait for stack exit, sleep 3
+    B->>B: preventScreenSaver=1, set flIntensity
+    B->>Cfg: source token (TODO_TOKEN, BASE_URL)
+    B->>L: exec image-loop.sh URL INTERVAL
+
+    loop every INTERVAL (~15s)
+        L->>W: curl --etag-compare (conditional GET)
+        alt 200 — state changed
+            W-->>L: PNG body + new ETag
+            L->>FB: redraw e-ink (GC16)
+        else 304 — unchanged
+            W-->>L: 304, no redraw (no flashing)
+        end
+        L->>L: sleep INTERVAL
+    end
+```
+
 ---
 
 ## Repository layout
@@ -109,18 +220,20 @@ logic lives in the Worker, so changing the look is a redeploy — no device acce
 worker/                         Cloudflare Worker
   src/
     index.ts                    routes: page, /api/lists, /api/selection, /api/todos, /todo.png
-    og.tsx                      PNG render (satori/resvg)
+    og.tsx                      PNG render: list + error screens (satori/resvg)
+    errors.ts                   error-screen catalog + failure classifier
     providers/
       types.ts                  TodoProvider interface + Todo type
       factory.ts                createProvider(env)
       microsoft/                ported Graph client + MicrosoftTodoProvider
-  test/                         provider client unit tests (vitest)
+  test/                         client + error-classifier unit tests (vitest)
   wrangler.jsonc                Worker config
   .dev.vars.example             local Worker secrets template
 extensions/kindletodo/          Kindle KUAL extension
   bin/boot-image.sh             boot: stop X stack, set light, run loop
-  bin/image-loop.sh             poll /todo.png, fbink on change
+  bin/image-loop.sh             poll /todo.png, fbink on change, error screens
   bin/config.example.sh         device-local config template (token)
+  assets/                       error PNGs (downloaded by kindle.sh deploy)
   kindletodo.upstart.conf       Upstart service (-> /etc/upstart/)
   config.xml, menu.json         KUAL registration
 scripts/kindle.sh               deploy to / ssh the Kindle using .env
@@ -195,9 +308,9 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 
 1. **Install the extension.** Mount the Kindle over USB and copy
    `extensions/kindletodo/` to `/mnt/us/extensions/kindletodo/`. The frontlight
-   (`flIntensity`, 0 = off … 24 = max) and `INTERVAL` are set in
-   `bin/boot-image.sh`; the **token is not** — it's provisioned separately (step
-   4) so it never lands in git.
+   (`FLINTENSITY`, 0 = off … 24 = max, **default 0**) and poll `INTERVAL` default
+   in `bin/boot-image.sh` but are overridable per-device in `bin/config.local`;
+   the **token is not committed** — it's provisioned separately (step 4).
 
 2. **Enable SSH.** In KUAL, enable **USBNetLite** (over Wi-Fi). Change its
    default password (`/mnt/us/usbnetlite/etc/config`) from `kindle`.
@@ -228,8 +341,9 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 > (a USB-data connection interferes with Wi-Fi SSH). In kiosk mode the device
 > stays awake to poll, so keep it powered.
 
-**Revert to a normal Kindle:** remove `/etc/upstart/kindletodo.conf` and
-`start x` (or just reboot after removing).
+**Revert to a normal Kindle:** the quick escape hatch is the `DISABLE` flag
+(drop a file over USB — no shell needed); to remove it for good, delete the boot
+service. See [Resilience & recovery](#resilience--recovery).
 
 ---
 
@@ -242,8 +356,10 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 - **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.
 - **Change the look:** edit `worker/src/og.tsx` and `wrangler deploy`. No device
   access needed; the Kindle picks it up on its next poll.
-- **Adjust brightness live:** `ssh root@<kindle-ip>` then
-  `lipc-set-prop com.lab126.powerd flIntensity <0-24>`.
+- **Adjust brightness:** the frontlight defaults to **off** (`FLINTENSITY=0`).
+  Live: `scripts/kindle.sh ssh 'lipc-set-prop com.lab126.powerd flIntensity <0-24>'`.
+  Permanent: set `FLINTENSITY=` in the device `config.local` (or re-run
+  `scripts/kindle.sh deploy`).
 
 ---
 
@@ -259,6 +375,95 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 - **Security:** the token is kept out of git — it lives in the deployed
   Cloudflare secret, the git-ignored `worker/.dev.vars` and `.env`, and the
   device's uncommitted `config.local`. Rotate it (below) if it ever leaks.
+
+## Error screens
+
+When something breaks, the wall shows a friendly full-screen message instead of
+a silently stale (or frozen) list. They fall into two groups by *where* they're
+drawn — because a screen can only be rendered while the Worker is reachable.
+
+**Rendered by the Worker** — served in place of the list when Microsoft Graph
+fails, after a ~5-min last-known-good grace window:
+
+| Screen | Means | What to do |
+|:------:|-------|------------|
+| <img src="docs/errorpages/backend.png" width="120" alt="Microsoft To Do isn't responding"> | **Microsoft To Do isn't responding** — Graph is down, timing out, or rate-limiting. | Nothing — transient, clears itself. |
+| <img src="docs/errorpages/auth.png" width="120" alt="Microsoft sign-in expired"> | **Sign-in expired** — the refresh token was revoked or expired. | Mint a new refresh token and update the `MS_REFRESH_TOKEN` secret. |
+| <img src="docs/errorpages/list.png" width="120" alt="That list is gone"> | **List gone** — the selected list was deleted in To Do. | Pick another list in the web app. |
+
+**Drawn on the Kindle** — the Worker is unreachable, so the device draws a local
+PNG (pre-downloaded by `scripts/kindle.sh deploy`) after ~1 min of failed polls:
+
+| Screen | Means | What to do |
+|:------:|-------|------------|
+| <img src="docs/errorpages/nowifi.png" width="120" alt="No Wi-Fi"> | **No Wi-Fi** — no network, DNS, or TLS (or the device clock is wrong). | Check Wi-Fi; if it changed, use the `DISABLE` escape hatch below. |
+| <img src="docs/errorpages/notfound.png" width="120" alt="Server not found"> | **Server not found** (404) — wrong URL, route disabled, or not deployed. | Check the deploy / the `BASE_URL`. |
+| <img src="docs/errorpages/unauthorized.png" width="120" alt="Access token mismatch"> | **Token mismatch** (401) — the device token ≠ the deployed secret. | Re-run `scripts/kindle.sh deploy`. |
+| <img src="docs/errorpages/server.png" width="120" alt="Server error"> | **Server error** (5xx) — the Worker crashed. | Usually transient; check `wrangler tail` if it persists. |
+
+> Colors dither to grayscale on the Kindle's e-ink panel; the emoji and text stay
+> perfectly legible. Preview any screen live at `/error/<kind>.png?t=<TODO_TOKEN>`.
+
+## Resilience & recovery
+
+The kiosk stops the whole `x` stack (no on-device UI) and redraws **only on
+change**. That makes it robust to *content* failures but brittle to *access*
+failures. How the common scenarios play out:
+
+| Scenario | What happens | What to do |
+|----------|--------------|------------|
+| **Battery drain / power cut** | Screen keeps showing the last list (e-ink holds it with no power). On re-plugging it boots and redraws itself. | Nothing — it self-heals. Run it off a wall charger. |
+| **Frontlight annoying** | It's the light, not the silent image. | Default is already **off** (`FLINTENSITY=0`). Set it live or in `config.local`. Or shut down — e-ink keeps the image. **Avoid a short power-press (sleep):** an unchanged list returns `304`, so the loop won't repair a cleared/sleep screen until the todos actually change. |
+| **Microsoft/Graph down** | Worker keeps serving the last-good list for ~5 min, then renders a "not responding 😵" / "sign-in expired 🔑" screen. | Usually self-heals. "Sign-in expired" needs a new refresh token (see decommission/setup). |
+| **Wi-Fi changes** (new password / router / house) | No network → after ~1 min the device draws its local **"No Wi-Fi 😢"** screen (instead of freezing silently). X is stopped, so there's no UI to rejoin, and SSH runs over Wi-Fi. | Easiest: keep the **same SSID + password** when swapping routers and it just reconnects. Otherwise use the **`DISABLE` escape hatch** below to get the normal UI back and rejoin Wi-Fi. |
+| **Bad deploy / wrong token** | Device draws **"Server not found 🧭"** (404) or **"token mismatch 🔒"** (401) after ~1 min. | Fix the deploy / re-run `scripts/kindle.sh deploy`. |
+
+### The `DISABLE` escape hatch
+
+If `boot-image.sh` finds a file named `DISABLE` in `extensions/kindletodo/` (or
+in `bin/`), it exits **before** stopping `x`, leaving the normal Kindle UI — KUAL,
+Wi-Fi settings, KOReader — fully usable. Create it any way you can reach the
+device:
+
+- **Over USB** (no shell, no Wi-Fi needed): plug into a computer, and on the
+  Kindle's USB drive create an empty file at
+  `extensions/kindletodo/DISABLE`, then eject and reboot.
+- **Over SSH:** `scripts/kindle.sh ssh 'touch /mnt/us/extensions/kindletodo/DISABLE'` then reboot.
+
+Delete the file (and reboot) to hand the panel back to the kiosk.
+
+### Repurposing the Kindle later (e.g. back to plain KOReader)
+
+You don't need this repo or any secret for this — the goal is just to stop the
+kiosk:
+
+1. **Best:** drop the `DISABLE` flag (above), reboot → normal Kindle. To remove
+   it permanently, over SSH: `mntroot rw; rm /etc/upstart/kindletodo.conf; mntroot ro`,
+   then `rm -rf /mnt/us/extensions/kindletodo`.
+2. **If you've lost the SSH password and Wi-Fi:** the `DISABLE`-over-USB route
+   still works. Failing that, **factory-reset and re-jailbreak** — that needs no
+   secrets and no repo, and gives you a clean KOReader install.
+
+### Decommissioning the cloud side (don't skip this)
+
+Reclaiming the Kindle does **not** stop the Worker — it keeps running and **keeps
+a live refresh token to your Microsoft account**, readable by anyone who still
+has the token URL. When you retire the board:
+
+- `cd worker && wrangler delete` (or at least
+  `wrangler secret delete MS_REFRESH_TOKEN`) to take the Worker offline.
+- **Revoke** the Azure app registration / the refresh token in your Microsoft
+  account, so nothing can read your To Do lists afterward.
+
+### Keep these outside the repo
+
+The repo deliberately excludes every secret, so save these in a password manager
+— without them, recovery falls back to a factory reset:
+
+- **Cloudflare** account (to tear down / rotate the Worker + token)
+- **Azure app** registration + **MS refresh token** (to revoke access)
+- **`KINDLE_SSH_PASS`** + **Wi-Fi** SSID/password (for graceful device recovery)
+- **`TODO_TOKEN`** (minor — rotatable via Cloudflare)
 
 ## Secrets & the `.env`
 

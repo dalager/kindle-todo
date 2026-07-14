@@ -36,10 +36,27 @@ case "$cmd" in
     ;;
   deploy)
     : "${TODO_TOKEN:?set TODO_TOKEN in .env}"
+    BASE_URL="${BASE_URL:-https://todo.dalagerlabs.com}"
     echo "Copying scripts to $KINDLE_IP:$DEVDIR/bin/ ..."
     kscp "$ROOT"/extensions/kindletodo/bin/*.sh "root@$KINDLE_IP:$DEVDIR/bin/"
     echo "Writing device config (token) ..."
     printf 'TODO_TOKEN="%s"\n' "$TODO_TOKEN" | kssh "cat > $DEVDIR/bin/config.local && chmod 600 $DEVDIR/bin/config.local"
+    # Pre-download the error screens the device draws when the Worker is
+    # unreachable (rendered by the Worker so they match the real look).
+    echo "Fetching error screens from $BASE_URL ..."
+    ADIR="$(mktemp -d)"
+    for kind in nowifi notfound unauthorized server; do
+      if curl -fsS "$BASE_URL/error/$kind.png?t=$TODO_TOKEN" -o "$ADIR/err-$kind.png"; then
+        echo "  ok: err-$kind.png"
+      else
+        echo "  WARN: could not fetch err-$kind.png (device keeps a text fallback)"
+      fi
+    done
+    if ls "$ADIR"/err-*.png >/dev/null 2>&1; then
+      kssh "mkdir -p $DEVDIR/assets"
+      kscp "$ADIR"/err-*.png "root@$KINDLE_IP:$DEVDIR/assets/"
+    fi
+    rm -rf "$ADIR"
     echo "Restarting service ..."
     kssh "chmod +x $DEVDIR/bin/*.sh; restart kindletodo 2>/dev/null || start kindletodo; sleep 1; initctl status kindletodo"
     echo "Done. Give it ~25s (boot settle) then check: scripts/kindle.sh logs"

@@ -17,3 +17,9 @@ dist/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Kindle kiosk kill-switch (device-only artifact)
+extensions/kindletodo/DISABLE
+
+# Device error-screen assets (downloaded at deploy time)
+extensions/kindletodo/assets/

@@ -16,15 +16,22 @@
  *   POST /api/selection   -> set the served list (?list=<id>); { selected }
  *   GET  /api/todos       -> { title, todos }
  *   GET  /todo.png        -> full-screen 1072x1448 PNG (Kindle image mode)
+ *   GET  /error/<kind>.png-> a rendered error screen (for the device to pre-cache)
  *
  * The served list is cached briefly (LIST_CACHE_TTL) so the Kindle's ~15s
  * polling doesn't hammer the backend API; changing the selection invalidates
  * the cache so the switch shows on the next poll. Completing a task is done in
  * the upstream To Do app, not here.
+ *
+ * When the backend fails, /todo.png keeps serving the last-known-good list for a
+ * short grace period (rides out blips), then falls back to a rendered error
+ * screen. Failures the Worker can't even answer (no Wi-Fi, wrong URL) are drawn
+ * on-device from pre-downloaded PNGs — see src/errors.ts.
  */
-import { renderTodoPng } from "./og";
+import { renderTodoPng, renderErrorPng } from "./og";
 import type { Todo } from "./providers/types";
 import { createProvider, type ProviderEnv } from "./providers/factory";
+import { ERROR_SCREENS, classifyProviderError, type ErrorKind } from "./errors";
 
 interface Env extends ProviderEnv {
   TODO_TOKEN: string;
@@ -38,6 +45,10 @@ const NO_STORE = { "Cache-Control": "no-store" };
 const LIST_CACHE_TTL = 30;
 /** KV key holding the selected list id. */
 const SELECTED_LIST_KEY = "selected_list_id";
+// Last-known-good list lives in the edge Cache API (no KV write limits); its TTL
+// *is* the grace window — once it expires, /todo.png shows an error instead.
+const LAST_GOOD_KEY = "https://todo.internal/last-good";
+const LAST_GOOD_GRACE_TTL = 300; // seconds to keep serving the last good list
 
 // Reuse the provider across requests in the same isolate so its in-memory
 // access-token cache (and KV-backed refresh token) is shared.
@@ -81,6 +92,8 @@ async function getData(env: Env, ctx: ExecutionContext, listId: string): Promise
       }),
     ),
   );
+  // Remember the last successful fetch so /todo.png can ride out backend blips.
+  rememberLastGood(ctx, data);
   return data;
 }
 
@@ -88,13 +101,72 @@ function invalidateTodos(ctx: ExecutionContext, listId: string): void {
   ctx.waitUntil(caches.default.delete(listCacheKey(listId)));
 }
 
+/** Cache the last successful list; the entry's TTL is the grace window. */
+function rememberLastGood(ctx: ExecutionContext, data: TodoData): void {
+  ctx.waitUntil(
+    caches.default.put(
+      new Request(LAST_GOOD_KEY),
+      new Response(JSON.stringify(data), {
+        headers: { "Content-Type": "application/json", "Cache-Control": `max-age=${LAST_GOOD_GRACE_TTL}` },
+      }),
+    ),
+  );
+}
+
+/** The last good list, or null once its grace TTL has lapsed. */
+async function getLastGood(): Promise<TodoData | null> {
+  const hit = await caches.default.match(new Request(LAST_GOOD_KEY));
+  return hit ? ((await hit.json()) as TodoData) : null;
+}
+
 // ETag = strong hash of the exact state that determines the rendered image
 // (title + tasks), so a list rename, list switch, or task change flips it.
 async function etagFor(data: TodoData): Promise<string> {
-  const raw = new TextEncoder().encode(JSON.stringify(data));
-  const digest = await crypto.subtle.digest("SHA-256", raw);
+  return etagForString(JSON.stringify(data));
+}
+
+async function etagForString(s: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `"${hex}"`;
+}
+
+/**
+ * Shared PNG delivery: honor If-None-Match (304 → no redraw on the Kindle),
+ * cache the rendered bytes by ETag so a given state is rasterized at most once,
+ * and return the image with a no-cache ETag for conditional polling.
+ */
+async function servePng(
+  request: Request,
+  url: URL,
+  ctx: ExecutionContext,
+  etag: string,
+  render: () => Promise<Response>,
+): Promise<Response> {
+  if (request.headers.get("If-None-Match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-cache" } });
+  }
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(`/__png/${etag.slice(1, -1)}`, url.origin).toString());
+  let body: ArrayBuffer;
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    body = await hit.arrayBuffer();
+  } else {
+    const rendered = await render();
+    body = await rendered.arrayBuffer();
+    ctx.waitUntil(
+      cache.put(
+        cacheKey,
+        new Response(body, {
+          headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=31536000, immutable" },
+        }),
+      ),
+    );
+  }
+  return new Response(body, {
+    headers: { "Content-Type": "image/png", ETag: etag, "Cache-Control": "no-cache" },
+  });
 }
 
 function authorized(url: URL, env: Env): boolean {
@@ -301,35 +373,39 @@ export default {
 
     // Full-screen PNG for the Kindle's non-interactive (image) mode.
     if (request.method === "GET" && path === "/todo.png") {
+      // Resolve to either the list, a grace-period last-known-good list, or an
+      // error screen — then render/etag/cache all three the same way.
       const listId = await getSelectedListId(env);
-      const data = await getData(env, ctx, listId);
-      const etag = await etagFor(data);
-
-      if (request.headers.get("If-None-Match") === etag) {
-        return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-cache" } });
+      let etag: string;
+      let render: () => Promise<Response>;
+      try {
+        const data = await getData(env, ctx, listId);
+        etag = await etagFor(data);
+        render = () => renderTodoPng(data.todos, data.title, ctx);
+      } catch (err) {
+        const kind = classifyProviderError(err);
+        const lkg = await getLastGood();
+        if (lkg) {
+          // Within the grace window: keep showing the last good list.
+          etag = await etagFor(lkg);
+          render = () => renderTodoPng(lkg.todos, lkg.title, ctx);
+        } else {
+          etag = await etagForString(`error:${kind}`);
+          render = () => renderErrorPng(ERROR_SCREENS[kind], ctx);
+        }
       }
+      return servePng(request, url, ctx, etag, render);
+    }
 
-      const cache = caches.default;
-      const cacheKey = new Request(new URL(`/__png/${etag.slice(1, -1)}`, url.origin).toString());
-      let body: ArrayBuffer;
-      const hit = await cache.match(cacheKey);
-      if (hit) {
-        body = await hit.arrayBuffer();
-      } else {
-        const rendered = await renderTodoPng(data.todos, data.title, ctx);
-        body = await rendered.arrayBuffer();
-        ctx.waitUntil(
-          cache.put(
-            cacheKey,
-            new Response(body, {
-              headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=31536000, immutable" },
-            }),
-          ),
-        );
-      }
-      return new Response(body, {
-        headers: { "Content-Type": "image/png", ETag: etag, "Cache-Control": "no-cache" },
-      });
+    // Rendered error screens, so the device can pre-download the ones it draws
+    // itself when the Worker is unreachable (see scripts/kindle.sh deploy).
+    const em = path.match(/^\/error\/([a-z]+)\.png$/);
+    if (request.method === "GET" && em) {
+      const kind = em[1] as ErrorKind;
+      const screen = ERROR_SCREENS[kind];
+      if (!screen) return new Response("Not Found", { status: 404, headers: NO_STORE });
+      const etag = await etagForString(`error:${kind}`);
+      return servePng(request, url, ctx, etag, () => renderErrorPng(screen, ctx));
     }
 
     // List (returns { title, todos }) for the currently served list.

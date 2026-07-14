@@ -36,6 +36,28 @@ FLINTENSITY="${FLINTENSITY:-0}"
 # Let boot + Wi-Fi settle (Wi-Fi associates during startup).
 sleep 20
 
+# Clock sanity. The RTC lives in the BD71827 PMIC and is backed by the MAIN
+# battery (no coin cell), so a full discharge resets the clock — and a wrong
+# clock fails every TLS cert check, which looks exactly like "no Wi-Fi" and
+# never self-heals. The stock NTP sync lives in the framework we stop, so fix
+# it ourselves from a plain-HTTP Date header (no TLS, no chicken-and-egg).
+fix_clock() {
+  [ "$(date +%Y)" -ge 2024 ] && return 0
+  d=$(curl -sI --max-time 5 http://cloudflare.com 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: //p')
+  # "Tue, 14 Jul 2026 10:28:56 GMT" -> busybox "YYYY.MM.DD-hh:mm:ss"
+  set -- $d
+  [ $# -ge 5 ] || return 1
+  case "$3" in
+    Jan) m=01;; Feb) m=02;; Mar) m=03;; Apr) m=04;; May) m=05;; Jun) m=06;;
+    Jul) m=07;; Aug) m=08;; Sep) m=09;; Oct) m=10;; Nov) m=11;; Dec) m=12;;
+    *) return 1;;
+  esac
+  date -u -s "$4.$m.$2-$5" >/dev/null 2>&1 || return 1
+  hwclock -w 2>/dev/null
+  echo "$(date) clock synced from HTTP Date header" >> "$DIR/../image.log" 2>/dev/null
+}
+fix_clock
+
 # Take over the panel: stop the whole X/display stack.
 stop x 2>/dev/null
 

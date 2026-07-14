@@ -37,6 +37,24 @@ fails=0
 draw_png() { "$FBINK" -f -W GC16 -g file="$1" >/dev/null 2>&1; }
 draw_text() { "$FBINK" -c -m -y 20 "$1" >/dev/null 2>&1; }  # last-resort if asset missing
 
+# A reset clock (RTC dies with the main battery) fails all TLS => curl 000
+# forever. If the year is obviously wrong, resync from a plain-HTTP Date
+# header. The year guard makes this a no-op on healthy systems.
+fix_clock() {
+  [ "$(date +%Y)" -ge 2024 ] && return 0
+  d=$(curl -sI --max-time 5 http://cloudflare.com 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: //p')
+  set -- $d
+  [ $# -ge 5 ] || return 1
+  case "$3" in
+    Jan) m=01;; Feb) m=02;; Mar) m=03;; Apr) m=04;; May) m=05;; Jun) m=06;;
+    Jul) m=07;; Aug) m=08;; Sep) m=09;; Oct) m=10;; Nov) m=11;; Dec) m=12;;
+    *) return 1;;
+  esac
+  date -u -s "$4.$m.$2-$5" >/dev/null 2>&1 || return 1
+  hwclock -w 2>/dev/null
+  echo "$(date) clock synced from HTTP Date header" >> "$LOG"
+}
+
 # Draw an error screen once; do nothing if it's already on screen (no flashing).
 show_error() {
   kind="$1"; msg="$2"
@@ -72,6 +90,7 @@ while true; do
     fails=0            # unchanged and healthy
   else
     rm -f "${PNG}.tmp"
+    fix_clock  # no-op unless the clock is obviously wrong (post-deep-discharge)
     fails=$((fails + 1))
     if [ "$fails" -ge "$FAIL_THRESHOLD" ]; then
       case "$code" in

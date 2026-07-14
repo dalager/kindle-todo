@@ -11,8 +11,14 @@
 # Revert to a normal Kindle: remove /etc/upstart/kindletodo.conf and `start x`
 # (or just reboot after removing).
 
-URL="https://todo.dalagerlabs.com/todo.png?t=QKycWamyZC8vRdYsnYKA1v7u"
-INTERVAL=15
+# The access token is NOT committed. It lives in an uncommitted device-local
+# config next to this script (config.local), provisioned by `scripts/kindle.sh
+# deploy` from the repo .env. See config.example.sh for the format.
+CONF="$(dirname "$0")/config.local"
+[ -f "$CONF" ] && . "$CONF"
+BASE_URL="${BASE_URL:-https://todo.dalagerlabs.com}"
+URL="${BASE_URL}/todo.png?t=${TODO_TOKEN}"
+INTERVAL="${INTERVAL:-15}"
 
 # Let boot + Wi-Fi settle (Wi-Fi associates during startup).
 sleep 20

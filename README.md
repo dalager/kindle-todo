@@ -116,12 +116,15 @@ worker/                         Cloudflare Worker
       microsoft/                ported Graph client + MicrosoftTodoProvider
   test/                         provider client unit tests (vitest)
   wrangler.jsonc                Worker config
-  .dev.vars.example             local secrets template
+  .dev.vars.example             local Worker secrets template
 extensions/kindletodo/          Kindle KUAL extension
   bin/boot-image.sh             boot: stop X stack, set light, run loop
   bin/image-loop.sh             poll /todo.png, fbink on change
+  bin/config.example.sh         device-local config template (token)
   kindletodo.upstart.conf       Upstart service (-> /etc/upstart/)
   config.xml, menu.json         KUAL registration
+scripts/kindle.sh               deploy to / ssh the Kindle using .env
+.env.example                    ops env template (token, Kindle IP + SSH pass)
 ```
 
 ---
@@ -169,8 +172,13 @@ wrangler login
 for k in TODO_TOKEN MS_CLIENT_ID MS_CLIENT_SECRET MS_REFRESH_TOKEN MS_DEFAULT_LIST_ID; do
   printf '%s' "$(grep "^$k=" .dev.vars | cut -d= -f2- | tr -d '"')" | wrangler secret put "$k"
 done
-wrangler deploy        # -> custom domain (todo.dalagerlabs.com) + workers.dev URL
+wrangler deploy        # -> https://todo.dalagerlabs.com
 ```
+
+> **Heads-up:** `wrangler.jsonc` declares a `custom_domain` route
+> (`todo.dalagerlabs.com`). Adding a route **disables the `*.workers.dev` URL**
+> unless you also set `"workers_dev": true` — so after this deploy the Worker is
+> reachable *only* at the custom domain. Point the Kindle there (Part B).
 
 **Finding your list id:** list your To Do lists via the Graph explorer
 (`GET /me/todo/lists`) or a small script, and copy the `id` of the list you want
@@ -186,11 +194,10 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 ### Part B — Set up the Kindle
 
 1. **Install the extension.** Mount the Kindle over USB and copy
-   `extensions/kindletodo/` to `/mnt/us/extensions/kindletodo/`. Edit
-   `bin/boot-image.sh`:
-   - `URL=` → your `https://todo.dalagerlabs.com/todo.png?t=<TODO_TOKEN>`
-   - `INTERVAL=` → poll seconds (15 is a good default)
-   - `flIntensity` → frontlight 0 (off) … 24 (max)
+   `extensions/kindletodo/` to `/mnt/us/extensions/kindletodo/`. The frontlight
+   (`flIntensity`, 0 = off … 24 = max) and `INTERVAL` are set in
+   `bin/boot-image.sh`; the **token is not** — it's provisioned separately (step
+   4) so it never lands in git.
 
 2. **Enable SSH.** In KUAL, enable **USBNetLite** (over Wi-Fi). Change its
    default password (`/mnt/us/usbnetlite/etc/config`) from `kindle`.
@@ -203,7 +210,18 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
    initctl reload-configuration
    ```
 
-4. **Reboot.** The Kindle boots, stops the display stack, and comes up to the
+4. **Provision the token + push updates from your laptop.** Create the ops
+   `.env` (see [Secrets & the `.env`](#secrets--the-env) below), then:
+   ```sh
+   cp .env.example .env      # fill in TODO_TOKEN, KINDLE_IP, KINDLE_SSH_PASS
+   scripts/kindle.sh deploy  # copies bin/*.sh, writes the token, restarts service
+   ```
+   `deploy` writes `bin/config.local` on the device (the token — never committed)
+   and restarts the kiosk. Re-run it any time you change the scripts or rotate the
+   token. Handy: `scripts/kindle.sh logs`, `scripts/kindle.sh status`,
+   `scripts/kindle.sh ssh`.
+
+5. **Reboot.** The Kindle boots, stops the display stack, and comes up to the
    full-screen list. It now updates itself forever.
 
 > **Power:** run it from a **wall charger**, not a computer's USB port
@@ -238,9 +256,38 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
   so it reaches the Cloudflare edge (custom domain or `workers.dev`) over HTTPS
   without trouble.
 - **Blinking:** e-ink redraws flash, so the loop redraws **only on change**.
-- **Security:** the access token lives in `boot-image.sh` on the device and, if
-  you commit it, in the repo — keep the repo private and rotate the token / MS
-  credentials if they leak.
+- **Security:** the token is kept out of git — it lives in the deployed
+  Cloudflare secret, the git-ignored `worker/.dev.vars` and `.env`, and the
+  device's uncommitted `config.local`. Rotate it (below) if it ever leaks.
+
+## Secrets & the `.env`
+
+Two git-ignored env files, plus the device's own config — all excluded by
+`.gitignore` (`.env`, `.dev.vars`, `*.local`):
+
+| File | Where | Holds |
+|------|-------|-------|
+| `worker/.dev.vars` | laptop | Worker dev secrets: `TODO_TOKEN` + MS credentials (for `wrangler dev` and `wrangler secret put`) |
+| `.env` | laptop | Ops/deploy: `TODO_TOKEN`, `KINDLE_IP`, `KINDLE_SSH_PASS` (used by `scripts/kindle.sh`, so you never re-scan for the device) |
+| `bin/config.local` | Kindle | just `TODO_TOKEN` — written by `scripts/kindle.sh deploy`, sourced by `boot-image.sh` |
+
+`TODO_TOKEN` must be identical across all three **and** the deployed Cloudflare
+secret.
+
+**Finding `KINDLE_IP`:** the device runs a Dropbear SSH server on port 22 —
+`nmap -p22 --open 192.168.1.0/24`, or check your router's DHCP leases. Save it in
+`.env` once. **`KINDLE_SSH_PASS`** is the USBNetLite root password
+(`/mnt/us/usbnetlite/etc/config` on the device).
+
+**Rotating the token** (do all four so nothing 401s for long):
+
+```sh
+NEW=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
+sed -i -E "s/^TODO_TOKEN=.*/TODO_TOKEN=$NEW/"   worker/.dev.vars   # 1. Worker dev
+sed -i -E "s/^TODO_TOKEN=.*/TODO_TOKEN=\"$NEW\"/" .env             # 2. ops env
+cd worker && printf '%s' "$NEW" | wrangler secret put TODO_TOKEN && cd ..   # 3. prod
+scripts/kindle.sh deploy                                          # 4. the Kindle
+```
 
 ## Credits
 

@@ -153,11 +153,20 @@ sequenceDiagram
 
     Note over K,W: Kindle image poll (~every 15s)
     K->>W: GET /todo.png?t= (If-None-Match: etag)
-    alt list changed
-        W->>C: cache miss → render + store PNG
-        W-->>K: 200 image/png + ETag
-    else unchanged
-        W-->>K: 304 Not Modified (no redraw)
+    alt Graph OK
+        W->>C: store last-known-good (5-min TTL)
+        alt list changed
+            W-->>K: 200 image/png + ETag
+        else unchanged
+            W-->>K: 304 Not Modified (no redraw)
+        end
+    else Graph failing
+        W->>C: read last-known-good
+        alt within grace window
+            W-->>K: 200 last-good list (stale, rides out the blip)
+        else grace expired
+            W-->>K: 200 error screen (sign-in 🔑 / list 🤔 / backend 😵)
+        end
     end
 ```
 
@@ -193,20 +202,26 @@ sequenceDiagram
     participant FB as fbink (e-ink)
 
     U->>B: start on boot
+    B->>Cfg: source config (TODO_TOKEN, FLINTENSITY, BASE_URL)
+    opt DISABLE flag present
+        B-->>U: exit 0 — leave normal Kindle UI (USB escape hatch)
+    end
     B->>B: sleep 20 (Wi-Fi settle)
     B->>X: stop x (lxinit / pillow / blanket)
     B->>B: wait for stack exit, sleep 3
-    B->>B: preventScreenSaver=1, set flIntensity
-    B->>Cfg: source token (TODO_TOKEN, BASE_URL)
+    B->>B: preventScreenSaver=1, frontlight = FLINTENSITY (default 0)
     B->>L: exec image-loop.sh URL INTERVAL
 
     loop every INTERVAL (~15s)
-        L->>W: curl --etag-compare (conditional GET)
+        L->>W: conditional GET (ETag)
         alt 200 — state changed
             W-->>L: PNG body + new ETag
             L->>FB: redraw e-ink (GC16)
         else 304 — unchanged
             W-->>L: 304, no redraw (no flashing)
+        else unreachable (000 / 404 / 401 / 5xx)
+            Note over L,W: after ~4 consecutive fails
+            L->>FB: draw local error PNG once (nowifi / notfound / …)
         end
         L->>L: sleep INTERVAL
     end

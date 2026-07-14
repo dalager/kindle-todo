@@ -356,10 +356,9 @@ service. See [Resilience & recovery](#resilience--recovery).
 - **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.
 - **Change the look:** edit `worker/src/og.tsx` and `wrangler deploy`. No device
   access needed; the Kindle picks it up on its next poll.
-- **Adjust brightness:** the frontlight defaults to **off** (`FLINTENSITY=0`).
-  Live: `scripts/kindle.sh ssh 'lipc-set-prop com.lab126.powerd flIntensity <0-24>'`.
-  Permanent: set `FLINTENSITY=` in the device `config.local` (or re-run
-  `scripts/kindle.sh deploy`).
+- **Adjust brightness:** the frontlight defaults to **off**. Easiest: set
+  `KINDLE_FLINTENSITY=<0-24>` in `.env` and run `scripts/kindle.sh deploy`.
+  Live (no redeploy): `scripts/kindle.sh ssh 'lipc-set-prop com.lab126.powerd flIntensity <0-24>'`.
 
 ---
 
@@ -473,7 +472,7 @@ Two git-ignored env files, plus the device's own config — all excluded by
 | File | Where | Holds |
 |------|-------|-------|
 | `worker/.dev.vars` | laptop | Worker dev secrets: `TODO_TOKEN` + MS credentials (for `wrangler dev` and `wrangler secret put`) |
-| `.env` | laptop | Ops/deploy: `TODO_TOKEN`, `KINDLE_IP`, `KINDLE_SSH_PASS` (used by `scripts/kindle.sh`, so you never re-scan for the device) |
+| `.env` | laptop | Ops/deploy: `TODO_TOKEN`, `KINDLE_IP`, `KINDLE_SSH_PASS`, `KINDLE_FLINTENSITY` (used by `scripts/kindle.sh`, so you never re-scan for the device) |
 | `bin/config.local` | Kindle | just `TODO_TOKEN` — written by `scripts/kindle.sh deploy`, sourced by `boot-image.sh` |
 
 `TODO_TOKEN` must be identical across all three **and** the deployed Cloudflare

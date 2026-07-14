@@ -34,6 +34,12 @@ BATT_THRESHOLD="${BATT_THRESHOLD:-20}"
 # Keep the device awake so the screensaver doesn't paint over our image.
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 
+# Keep the log bounded: past ~256 KB, keep only the recent tail. (Appended to
+# forever otherwise — hourly battery lines alone add up over months.)
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null)" -gt 262144 ] 2>/dev/null; then
+  tail -n 200 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+fi
+
 echo "$(date) image-loop start interval=${INTERVAL}s" >> "$LOG"
 
 state=ok          # ok | nowifi | notfound | unauthorized | server

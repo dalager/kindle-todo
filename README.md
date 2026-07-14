@@ -253,6 +253,7 @@ extensions/kindletodo/          Kindle KUAL extension
   config.xml, menu.json         KUAL registration
 scripts/kindle.sh               deploy to / ssh the Kindle using .env
 .env.example                    ops env template (token, Kindle IP + SSH pass)
+docs/devices/                   hardware spec of the target Kindle (PW4)
 ```
 
 ---

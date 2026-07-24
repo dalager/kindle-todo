@@ -12,6 +12,27 @@ for anyone porting kindle-todo to other e-ink hardware.
 | Board | "Lab126 i.MX6SLL Board" |
 | Firmware at probe | 5.18.1.1.1 (`023-juno_18010101_moonshine_rex-476968`) |
 
+## Physical dimensions
+
+Not software-probeable — sourced from Amazon's spec sheet, independent reviews,
+and a community CAD model. Relevant for the wall-mount enclosure.
+
+| Measurement | Value |
+|---|---|
+| Height | **167 mm** (6.6 in) |
+| Width | **116 mm** (4.6 in) |
+| Thickness | **8.18 mm** (~8.2 mm, 0.3 in) |
+| Weight | **182 g** (Wi-Fi, 6.4 oz); 191 g (Wi-Fi + Cellular) |
+| Display active area | 6″ diagonal (1072 × 1448 @ 300 ppi — see [Display](#display)) |
+
+A dimensionally-accurate solid-body CAD model of the device (for designing
+mounts/enclosures against real geometry, not a case) is checked in alongside
+this file: [`kindle-paperwhite-10th-gen-2018.stp`](./kindle-paperwhite-10th-gen-2018.stp)
+(STEP AP203/214). Source: [chairmanwon on Printables](https://www.printables.com/model/1061750-kindle-paperwhite-10th-gen-2018).
+For internal layout (board, battery, mounting points) see the
+[PW4 teardown on MobileRead](https://www.mobileread.com/forums/showthread.php?t=312360)
+and [iFixit's Kindle Paperwhite 4 guides](https://www.ifixit.com/Device/Kindle_Paperwhite_4).
+
 ## SoC & compute
 
 | Component | Detail |

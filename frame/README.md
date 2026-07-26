@@ -11,6 +11,12 @@ Two ways to build it: **laser-cut plywood** (5 layers glued up) or **3D print**
 
 ![Front](renders/21_step_front.png)
 
+Back, with the panel off — the device pocket, both keyhole hangers, the five panel
+screw holes, and the cable slot notched into the bottom edge. The striped edge is
+the five plywood layers.
+
+![Back, panel removed](renders/20_step_iso.png)
+
 ## Files
 
 | File | What it's for |

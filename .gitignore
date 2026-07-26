@@ -27,3 +27,4 @@ extensions/kindletodo/assets/
 # Local AI-tooling config (ruflo / Claude Code) — not part of the project
 CLAUDE.md
 .mcp.json
+frame/__pycache__

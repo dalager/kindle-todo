@@ -6,6 +6,19 @@
 	"observability": {
 		"enabled": true
 	},
+	// Nightly reset of daily "*" tasks (see src/recurring.ts).
+	// Cron Triggers fire on UTC only, so both candidate hours for Copenhagen
+	// midnight are registered: 22:00 UTC is midnight in summer (CEST, +2) and
+	// 23:00 UTC in winter (CET, +1). The Worker checks which one is genuinely
+	// local midnight and the other one returns immediately — so this stays
+	// correct across DST without editing the schedule twice a year.
+	// Change RESET_TIMEZONE below *and* these hours if you move timezone.
+	"triggers": {
+		"crons": ["0 22 * * *", "0 23 * * *"]
+	},
+	"vars": {
+		"RESET_TIMEZONE": "Europe/Copenhagen"
+	},
 	// Custom domain the Kindle and phones hit (also on the account workers.dev URL).
 	"routes": [{ "pattern": "todo.dalagerlabs.com", "custom_domain": true }],
 	// LIST_STORE persists which list the web page picked to serve to the Kindle.

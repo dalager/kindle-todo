@@ -61,10 +61,11 @@ export class MicrosoftTodoClient {
   /**
    * List tasks in a list by list id. Port of `get_tasks(list_id=...)`.
    *
-   * By default only open (not completed) tasks are returned, matching the CLI.
+   * By default only open (not completed) tasks are returned in a single
+   * request, matching the CLI. Pass `maxPages` to follow `@odata.nextLink`.
    */
   async listTasks(listId: string, options: ListTasksOptions = {}): Promise<Task[]> {
-    const { numTasks = 100, includeCompleted = false, onlyCompleted = false } = options;
+    const { numTasks = 100, includeCompleted = false, onlyCompleted = false, maxPages = 1 } = options;
 
     // Build the query manually so spaces in `$filter` are encoded as `%20`
     // (matching the Python client) rather than `+` as URLSearchParams would do.
@@ -75,9 +76,16 @@ export class MicrosoftTodoClient {
       query.push(`$filter=${encodeURIComponent("status ne 'completed'")}`);
     }
 
-    const url = `${BASE_URL}/${encodeURIComponent(listId)}/tasks?${query.join("&")}`;
-    const data = await this.request<GraphCollection<RawTask>>("GET", url);
-    return data.value.map(mapTask);
+    // Graph hands back an absolute, fully-formed nextLink — follow it verbatim
+    // rather than rebuilding the query.
+    let next: string | undefined = `${BASE_URL}/${encodeURIComponent(listId)}/tasks?${query.join("&")}`;
+    const tasks: Task[] = [];
+    for (let page = 0; next && page < maxPages; page++) {
+      const data: GraphCollection<RawTask> = await this.request<GraphCollection<RawTask>>("GET", next);
+      tasks.push(...data.value.map(mapTask));
+      next = data["@odata.nextLink"];
+    }
+    return tasks;
   }
 
   /**
@@ -91,6 +99,21 @@ export class MicrosoftTodoClient {
       completedDateTime: toApiTimestamp(new Date()),
     };
     const data = await this.request<RawTask>("PATCH", url, body);
+    return mapTask(data);
+  }
+
+  /**
+   * Reopen a completed task by putting it back to `notStarted` — the inverse of
+   * {@link completeTask}, used by the nightly recurring-task reset.
+   *
+   * Only `status` is PATCHed. `completedDateTime` is left as Graph returns it:
+   * every read in this app filters on `status`, so a lingering timestamp is
+   * invisible here, and a `dateTimeTimeZone` is not a field worth nulling
+   * blind. Returns the updated task.
+   */
+  async reopenTask(listId: string, taskId: string): Promise<Task> {
+    const url = `${BASE_URL}/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(taskId)}`;
+    const data = await this.request<RawTask>("PATCH", url, { status: "notStarted" });
     return mapTask(data);
   }
 

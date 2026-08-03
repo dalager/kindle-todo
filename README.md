@@ -62,11 +62,16 @@ TypeScript, deployed to Cloudflare. Zero runtime dependencies beyond the PNG
 renderer.
 
 - **Provider abstraction** (`src/providers/`) — the app depends on a small
-  `TodoProvider` interface (`lists()`, `title(listId?)`, `list(listId?)`); a
+  `TodoProvider` interface (`lists()`, `title(listId?)`, `list(listId?)`,
+  `completed(listId?)`, `reopen(taskId, listId?)`); a
   `factory` picks the implementation from config. Microsoft To Do
   (`providers/microsoft/`) is the only backend today, wrapping a ported,
   zero-dependency Microsoft Graph client (refresh-token grant). Adding another
   source is a new class + one line in the factory.
+- **Daily recurring tasks** (`src/recurring.ts`) — a task with a `*` in its
+  title is a daily chore: tick it off and it leaves the wall, and at local
+  midnight the Worker reopens it for the next day. See
+  [Daily recurring tasks](#daily-recurring-tasks-).
 - **List picker** — the web page lists every To Do list and lets you choose
   which one is served to the Kindle. The choice is persisted in the `LIST_STORE`
   KV namespace (falling back to `MS_DEFAULT_LIST_ID`), so the Kindle's next poll
@@ -234,14 +239,16 @@ sequenceDiagram
 ```
 worker/                         Cloudflare Worker
   src/
-    index.ts                    routes: page, /api/lists, /api/selection, /api/todos, /todo.png
+    index.ts                    routes: page, /api/lists, /api/selection, /api/todos,
+                                /api/reset-recurring, /todo.png + nightly cron
     og.tsx                      PNG render: list + error screens (satori/resvg)
     errors.ts                   error-screen catalog + failure classifier
+    recurring.ts                daily "*" tasks: marker rule + local-midnight reset
     providers/
       types.ts                  TodoProvider interface + Todo type
       factory.ts                createProvider(env)
       microsoft/                ported Graph client + MicrosoftTodoProvider
-  test/                         client + error-classifier unit tests (vitest)
+  test/                         client, error-classifier + recurring unit tests (vitest)
   wrangler.jsonc                Worker config
   .dev.vars.example             local Worker secrets template
 extensions/kindletodo/          Kindle KUAL extension
@@ -303,6 +310,11 @@ for k in TODO_TOKEN MS_CLIENT_ID MS_CLIENT_SECRET MS_REFRESH_TOKEN MS_DEFAULT_LI
 done
 wrangler deploy        # -> https://<yourdomain>
 ```
+
+`wrangler deploy` also registers the nightly cron triggers declared in
+`wrangler.jsonc` (see [Daily recurring tasks](#daily-recurring-tasks-)). Cron
+changes take **up to 15 minutes** to propagate across the network, so a schedule
+added minutes before its firing time may miss that first night.
 
 Your `<yourdomain>` can just be the free Cloudflare **`*.workers.dev`** URL you
 get out of the box (e.g. `kindletodo.<your-subdomain>.workers.dev`) — no custom
@@ -377,11 +389,81 @@ service. See [Resilience & recovery](#resilience--recovery).
   on any device and pick which To Do list the Kindle serves; the wall follows on
   its next poll.
 - **Tick items off:** complete tasks in Microsoft To Do itself — the wall follows.
+- **Make a task daily:** put a `*` in its title — see below.
 - **Change the look:** edit `worker/src/og.tsx` and `wrangler deploy`. No device
   access needed; the Kindle picks it up on its next poll.
 - **Adjust brightness:** the frontlight defaults to **off**. Easiest: set
   `KINDLE_FLINTENSITY=<0-24>` in `.env` and run `scripts/kindle.sh deploy`.
   Live (no redeploy): `scripts/kindle.sh ssh 'lipc-set-prop com.lab126.powerd flIntensity <0-24>'`.
+
+---
+
+## Daily recurring tasks (`*`)
+
+Some chores come back every day — the dishwasher, the bins, watering the plants.
+Put a **`*` anywhere in the task's title** and the Worker treats it as a daily
+task:
+
+| | |
+|---|---|
+| `* Opvask` | ticked off → leaves the wall → **back tomorrow morning** |
+| `Book tandlæge` | ticked off → gone for good, as usual |
+
+At **local midnight** the Worker finds every *completed* `*` task in the list
+currently served to the Kindle and reopens it (back to "not started") in
+Microsoft To Do. The wall picks it up on its next poll. Nothing is created or
+deleted — it's the same task, so its notes and due date survive.
+
+**Marking:** the `*` can sit anywhere in the title, and it stays visible on the
+wall — that's the cue that it's a daily one. Only the **served** list is reset;
+tasks in other lists are untouched until you select that list.
+
+**Timezone.** Cloudflare Cron Triggers fire on UTC only, so `wrangler.jsonc`
+registers *both* hours that can be Copenhagen midnight — `22:00` UTC (summer,
+CEST) and `23:00` UTC (winter, CET) — and the Worker runs the reset only on
+whichever one is genuinely local midnight that day. So it stays right across the
+DST switch with no seasonal edit. To move it, change **both**:
+
+```jsonc
+// worker/wrangler.jsonc
+"triggers": { "crons": ["0 22 * * *", "0 23 * * *"] },  // the two candidate UTC hours
+"vars":     { "RESET_TIMEZONE": "Europe/Copenhagen" }   // the zone that decides
+```
+
+Walking all 800 firings over the next 400 days gives **exactly one run per local
+day** — no doubled runs, no gaps, and the handover lands on the DST changeover
+day itself (25 Oct 2026 → `23:00Z`, 28 Mar 2027 → back to `22:00Z`).
+
+> **If you move `RESET_TIMEZONE`,** check that the zone's DST switch doesn't
+> happen *at* midnight. The EU shifts at 02:00/03:00 local, so the midnight hour
+> is never skipped or repeated — but a zone that transitions at midnight can lose
+> hour 0 for a day, and that night's reset would silently not run.
+
+**Testing it without waiting for midnight:**
+
+```bash
+# against the deployed Worker — runs the reset immediately
+curl -X POST "https://<yourdomain>/api/reset-recurring?t=<TODO_TOKEN>"
+# -> {"scanned":42,"reopened":["* Opvask"],"failed":[]}
+
+# or locally, driving the cron itself
+cd worker && npx wrangler dev --test-scheduled
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+22+*+*+*"
+```
+
+Note the curl above exercises the *reset*, not the *schedule* — it bypasses the
+cron entirely. To confirm the schedule itself is registered on the deployed
+Worker:
+
+```bash
+npx wrangler deployments list          # did the deploy land?
+# and watch the real thing fire at local midnight:
+npx wrangler tail --format pretty      # or dashboard -> Worker -> Logs -> Cron Events
+```
+
+Each run logs a `recurring reset` line (Workers Logs is enabled), and a task
+Graph refuses is reported in `failed` without stopping the rest — it just gets
+picked up by the next night's run.
 
 ---
 

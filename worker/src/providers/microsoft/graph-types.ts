@@ -47,12 +47,19 @@ export interface Task {
 
 /** Options for {@link MicrosoftTodoClient.listTasks}. */
 export interface ListTasksOptions {
-  /** Maximum number of tasks to return (Graph `$top`). Default 100. */
+  /** Page size (Graph `$top`). Default 100. */
   numTasks?: number;
   /** Include completed tasks alongside open ones. Default false. */
   includeCompleted?: boolean;
   /** Return only completed tasks. Overrides `includeCompleted`. Default false. */
   onlyCompleted?: boolean;
+  /**
+   * How many pages to follow via `@odata.nextLink`. Default 1 — a single
+   * request, matching the CLI. Raise it when the tail matters: a list's
+   * *completed* tasks accumulate forever, so one page of 100 stops being the
+   * whole picture after a few months of daily chores.
+   */
+  maxPages?: number;
 }
 
 // --- Raw Graph API shapes (internal) ---
@@ -90,4 +97,6 @@ export interface RawTask {
 /** Graph collection response envelope. */
 export interface GraphCollection<T> {
   value: T[];
+  /** Absolute URL of the next page, present only when the result is truncated. */
+  "@odata.nextLink"?: string;
 }

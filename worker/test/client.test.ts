@@ -202,6 +202,76 @@ describe("MicrosoftTodoClient", () => {
     expect(task.status).toBe("completed");
   });
 
+  it("reopenTask PATCHes status back to notStarted", async () => {
+    let method = "";
+    let payload: unknown;
+    const fetchMock = mockFetch((url, init) => {
+      if (url.includes("/token")) return tokenResponse();
+      method = init!.method!;
+      payload = JSON.parse(init!.body as string);
+      return new Response(
+        JSON.stringify({
+          id: "T1",
+          title: "* Opvask",
+          status: "notStarted",
+          importance: "normal",
+          isReminderOn: false,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const task = await new MicrosoftTodoClient(CONFIG).reopenTask("L1", "T1");
+    expect(method).toBe("PATCH");
+    expect(payload).toEqual({ status: "notStarted" });
+    expect(task.status).toBe("notStarted");
+  });
+
+  it("listTasks stops after one page by default", async () => {
+    let taskRequests = 0;
+    const fetchMock = mockFetch((url) => {
+      if (url.includes("/token")) return tokenResponse();
+      taskRequests++;
+      return new Response(
+        JSON.stringify({
+          value: [{ id: "T1", title: "a", status: "completed", importance: "normal", isReminderOn: false }],
+          "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/todo/lists/L1/tasks?$skiptoken=x",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tasks = await new MicrosoftTodoClient(CONFIG).listTasks("L1");
+    expect(taskRequests).toBe(1);
+    expect(tasks).toHaveLength(1);
+  });
+
+  it("listTasks follows @odata.nextLink up to maxPages", async () => {
+    const urls: string[] = [];
+    const fetchMock = mockFetch((url) => {
+      if (url.includes("/token")) return tokenResponse();
+      urls.push(url);
+      const page = urls.length;
+      const body: Record<string, unknown> = {
+        value: [{ id: `T${page}`, title: `t${page}`, status: "completed", importance: "normal", isReminderOn: false }],
+      };
+      // Two pages available, then the collection ends.
+      if (page < 2) body["@odata.nextLink"] = `https://graph.microsoft.com/v1.0/next?page=${page + 1}`;
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tasks = await new MicrosoftTodoClient(CONFIG).listTasks("L1", {
+      onlyCompleted: true,
+      maxPages: 5,
+    });
+
+    expect(tasks.map((t) => t.id)).toEqual(["T1", "T2"]);
+    expect(urls[1]).toBe("https://graph.microsoft.com/v1.0/next?page=2"); // followed verbatim
+  });
+
   it("surfaces Graph errors with status", async () => {
     const fetchMock = mockFetch((url) => {
       if (url.includes("/token")) return tokenResponse();

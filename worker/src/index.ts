@@ -15,8 +15,12 @@
  *   GET  /api/lists       -> { lists: [{ id, name }], selected }
  *   POST /api/selection   -> set the served list (?list=<id>); { selected }
  *   GET  /api/todos       -> { title, todos }
+ *   POST /api/reset-recurring -> run the nightly `*` reset now; { scanned, ... }
  *   GET  /todo.png        -> full-screen 1072x1448 PNG (Kindle image mode)
  *   GET  /error/<kind>.png-> a rendered error screen (for the device to pre-cache)
+ *
+ * A cron trigger reopens the day's completed `*` tasks at local midnight so
+ * daily chores come back on the wall — see src/recurring.ts.
  *
  * The served list is cached briefly (LIST_CACHE_TTL) so the Kindle's ~15s
  * polling doesn't hammer the backend API; changing the selection invalidates
@@ -32,11 +36,14 @@ import { renderTodoPng, renderErrorPng } from "./og";
 import type { Todo } from "./providers/types";
 import { createProvider, type ProviderEnv } from "./providers/factory";
 import { ERROR_SCREENS, classifyProviderError, type ErrorKind } from "./errors";
+import { DEFAULT_TIMEZONE, isLocalMidnight, resetRecurring, type ResetResult } from "./recurring";
 
 interface Env extends ProviderEnv {
   TODO_TOKEN: string;
   /** KV persisting which list is served to the Kindle. Falls back to default. */
   LIST_STORE?: KVNamespace;
+  /** IANA zone whose midnight resets `*` tasks. Defaults to DEFAULT_TIMEZONE. */
+  RESET_TIMEZONE?: string;
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -99,6 +106,18 @@ async function getData(env: Env, ctx: ExecutionContext, listId: string): Promise
 
 function invalidateTodos(ctx: ExecutionContext, listId: string): void {
   ctx.waitUntil(caches.default.delete(listCacheKey(listId)));
+}
+
+/**
+ * Reopen the served list's completed `*` tasks and make the change visible on
+ * the Kindle's next poll. Shared by the nightly cron and the manual trigger.
+ */
+async function runRecurringReset(env: Env, ctx: ExecutionContext): Promise<ResetResult> {
+  const listId = await getSelectedListId(env);
+  const result = await resetRecurring(getProvider(env), listId);
+  if (result.reopened.length > 0) invalidateTodos(ctx, listId);
+  console.log("recurring reset", JSON.stringify({ listId, ...result }));
+  return result;
 }
 
 /** Cache the last successful list; the entry's TTL is the grace window. */
@@ -408,6 +427,17 @@ export default {
       return servePng(request, url, ctx, etag, () => renderErrorPng(screen, ctx));
     }
 
+    // Run the nightly recurring reset now. The cron below is the real trigger;
+    // this exists so the convention can be verified without waiting for midnight.
+    if (path === "/api/reset-recurring") {
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+      try {
+        return Response.json(await runRecurringReset(env, ctx), { headers: NO_STORE });
+      } catch (err) {
+        return Response.json({ error: errMessage(err) }, { status: errStatus(err), headers: NO_STORE });
+      }
+    }
+
     // List (returns { title, todos }) for the currently served list.
     if (path === "/api/todos") {
       if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
@@ -416,6 +446,24 @@ export default {
     }
 
     return new Response("Not Found", { status: 404, headers: NO_STORE });
+  },
+
+  /**
+   * Nightly reset of the daily `*` chores (see src/recurring.ts).
+   *
+   * Two UTC crons are registered because Cron Triggers can't express a local
+   * time; exactly one of them is local midnight on any given day, and the other
+   * returns here without doing anything. A failure is logged and left to
+   * tomorrow's run — there is nothing useful to retry against at 00:00.
+   */
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const timeZone = env.RESET_TIMEZONE || DEFAULT_TIMEZONE;
+    if (!isLocalMidnight(controller.scheduledTime, timeZone)) return;
+    try {
+      await runRecurringReset(env, ctx);
+    } catch (err) {
+      console.error("recurring reset failed", errMessage(err));
+    }
   },
 } satisfies ExportedHandler<Env>;
 

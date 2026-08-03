@@ -29,4 +29,11 @@ export interface TodoProvider {
   title(listId?: string): Promise<string>;
   /** The tasks to display (open/pending tasks) for a list (defaults to configured). */
   list(listId?: string): Promise<Todo[]>;
+  /**
+   * The *completed* tasks of a list (defaults to configured), including ones
+   * completed long ago. Feeds the nightly recurring-task reset.
+   */
+  completed(listId?: string): Promise<Todo[]>;
+  /** Put a completed task back to open. Inverse of completing it upstream. */
+  reopen(taskId: string, listId?: string): Promise<void>;
 }

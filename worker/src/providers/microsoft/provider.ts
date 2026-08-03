@@ -50,12 +50,37 @@ export class MicrosoftTodoProvider implements TodoProvider {
   /** Open tasks in the given list, newest-relevant order from Graph. */
   async list(listId: string = this.defaultListId): Promise<Todo[]> {
     const tasks = await this.client.listTasks(listId); // open tasks only
-    return tasks.map((t) => ({
-      id: t.id,
-      text: t.title,
-      done: t.status === "completed",
-    }));
+    return tasks.map(toTodo);
   }
+
+  /**
+   * Completed tasks in the given list. Pages through Graph (unlike {@link list},
+   * which only ever needs the first page of *open* tasks): completed tasks are
+   * never pruned upstream, so a household list outgrows one page within months
+   * and a single request would quietly stop seeing today's chores.
+   */
+  async completed(listId: string = this.defaultListId): Promise<Todo[]> {
+    const tasks = await this.client.listTasks(listId, {
+      onlyCompleted: true,
+      maxPages: COMPLETED_MAX_PAGES,
+    });
+    return tasks.map(toTodo);
+  }
+
+  async reopen(taskId: string, listId: string = this.defaultListId): Promise<void> {
+    await this.client.reopenTask(listId, taskId);
+  }
+}
+
+/**
+ * Pages of completed tasks to walk (100 each). Bounds the nightly reset's Graph
+ * calls on a pathologically long history rather than paging forever.
+ */
+const COMPLETED_MAX_PAGES = 20;
+
+/** Graph task -> the app's normalized shape. */
+function toTodo(task: { id: string; title: string; status: string }): Todo {
+  return { id: task.id, text: task.title, done: task.status === "completed" };
 }
 
 /** Convenience: build a KV-backed token store from a KV namespace, if present. */

@@ -28,3 +28,5 @@ extensions/kindletodo/assets/
 CLAUDE.md
 .mcp.json
 frame/__pycache__
+.swarm/ruvnet-brain-learn
+worker/.swarm/ruvnet-brain-learn

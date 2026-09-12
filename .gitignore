@@ -30,3 +30,7 @@ CLAUDE.md
 frame/__pycache__
 .swarm/ruvnet-brain-learn
 worker/.swarm/ruvnet-brain-learn
+
+# Third-party binaries fetched by scripts/stage-usb.sh (see VENDORING note there)
+vendor/
+.swarm

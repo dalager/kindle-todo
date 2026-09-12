@@ -103,10 +103,11 @@ consumer.
 |---|---|
 | Kernel | Linux **4.1.15-lab126**, SMP PREEMPT, built with gcc 4.9.1 |
 | libc | glibc **2.20** (2014) — why modern binaries generally need static linking |
-| Init | Upstart (this project's `kindletodo.conf` hooks `started framework`) |
+| Jailbreak | **SpiderCat** (`jb.sh v1.3.7`, sparklerfish) on 5.18.1.1.1, installed 2026-09-12 after a factory reset; **hdnext** stack with **KPM** (`/var/local/kmc/bin/kpm`) — no KUAL. Boot persistence of the root hooks not yet verified; the kiosk does not depend on it. |
+| Init | Upstart (this project's `kindletodo.conf` hooks `started framework`; installed via the `KindleTodo-Install.sh` scriptlet, which runs as root) |
 | Bootloader | u-boot with secure boot (`secure_cpu=1`, `unlocked_kernel=false`); serial console `ttymxc0` @ 115200 |
-| Display userland | stock: X + lxinit/pillow/blanket (stopped by `boot-image.sh`); kiosk draws via **fbink** |
-| SSH | Dropbear via USBNetLite (port 22, Wi-Fi) |
+| Display userland | stock: X + lxinit/pillow/blanket (stopped by `boot-image.sh`); kiosk draws via **fbink** at `/mnt/us/libkh/bin/fbink` (placed there by the jailbreak; a copy is harvested to `vendor/fbink`) |
+| SSH | Dropbear via USBNetLite (port 22, Wi-Fi) — **not installed** since the 2026-09-12 rebuild; the KPM repo has no SSH package, so it is the usbnetlite `.bin` (staged by `scripts/stage-usb.sh`) or kTerm |
 
 ## Not software-visible
 

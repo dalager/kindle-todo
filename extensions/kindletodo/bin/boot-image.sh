@@ -23,15 +23,20 @@ fi
 
 # The access token is NOT committed. It lives in an uncommitted device-local
 # config next to this script (config.local), provisioned by `scripts/kindle.sh
-# deploy` from the repo .env. See config.example.sh for the format.
+# deploy` from the repo .env. See config.example.sh for the format. Everything
+# in it is exported so image-loop.sh sees the cadence/suspend settings too.
 CONF="$DIR/config.local"
+set -a
 [ -f "$CONF" ] && . "$CONF"
+set +a
 BASE_URL="${BASE_URL:-https://todo.dalagerlabs.com}"
 URL="${BASE_URL}/todo.png?t=${TODO_TOKEN}"
 INTERVAL="${INTERVAL:-15}"
 # Frontlight 0=off .. 24=max. e-ink is readable in a lit room with 0; raise it
 # in config.local (FLINTENSITY=...) if the spot is dim.
-FLINTENSITY="${FLINTENSITY:-0}"
+export FLINTENSITY="${FLINTENSITY:-0}"
+# Local time zone for the night window (POSIX TZ string; default Copenhagen).
+export TZ="${TZ:-CET-1CEST,M3.5.0,M10.5.0/3}"
 
 # Let boot + Wi-Fi settle (Wi-Fi associates during startup).
 sleep 20
@@ -71,12 +76,13 @@ while [ $i -lt 20 ]; do
 done
 sleep 3
 
-# Keep the panel awake and set the frontlight (FLINTENSITY, default 0=off).
+# Keep powerd's screensaver/auto-suspend off (image-loop.sh decides when to
+# suspend) and set the frontlight (FLINTENSITY, default 0=off).
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 lipc-set-prop com.lab126.powerd flIntensity "$FLINTENSITY" 2>/dev/null
 
 # The i.MX6SLL has two P-states (396/996 MHz) and boots pinned to
-# `performance`. The kiosk is one curl + occasional fbink per 15s — 396 MHz
+# `performance`. The kiosk is one curl + occasional fbink per poll — 396 MHz
 # is ample (e-ink refresh is EPDC-bound, not CPU-bound). Less heat, and
 # longer battery ride-through during a power cut.
 echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null

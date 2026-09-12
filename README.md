@@ -186,6 +186,11 @@ A jailbroken Kindle running a tiny KUAL extension plus an Upstart boot service.
 - **`bin/image-loop.sh`** — polls `/todo.png` with a conditional request
   (`curl --etag-compare/--etag-save`) and redraws e-ink with **`fbink`** only
   when the state changes (a `200`); `304`s cost nothing and cause no flashing.
+  The cadence follows the clock and the charger: every 15 s by day on power;
+  **once an hour, on the hour, from 22:30 to 06:00**; every 5 min on battery
+  (15 min under 20 %). Between the slow polls it **suspends to RAM** with an
+  RTC wake alarm, and at 5 % it powers off cleanly (see
+  [Power & battery](#power--battery)).
 - **`kindletodo.upstart.conf`** — the Upstart unit (installed to
   `/etc/upstart/kindletodo.conf`) that supervises `boot-image.sh` with `respawn`.
 
@@ -207,7 +212,7 @@ sequenceDiagram
     participant FB as fbink (e-ink)
 
     U->>B: start on boot
-    B->>Cfg: source config (TODO_TOKEN, FLINTENSITY, BASE_URL)
+    B->>Cfg: source + export config (TODO_TOKEN, FLINTENSITY, TZ, night/battery cadence)
     opt DISABLE flag present
         B-->>U: exit 0 — leave normal Kindle UI (USB escape hatch)
     end
@@ -217,7 +222,8 @@ sequenceDiagram
     B->>B: preventScreenSaver=1, frontlight = FLINTENSITY (default 0)
     B->>L: exec image-loop.sh URL INTERVAL
 
-    loop every INTERVAL (~15s)
+    loop each poll
+        L->>L: read battery (warn <20 %, clean power-off ≤5 %)
         L->>W: conditional GET (ETag)
         alt 200 — state changed
             W-->>L: PNG body + new ETag
@@ -228,7 +234,11 @@ sequenceDiagram
             Note over L,W: after ~4 consecutive fails
             L->>FB: draw local error PNG once (nowifi / notfound / …)
         end
-        L->>L: sleep INTERVAL
+        alt daytime, on charger
+            L->>L: sleep INTERVAL (~15 s), stay awake
+        else night (22:30–06:00) / on battery
+            L->>L: RTC wake alarm (next hour / 5–15 min) → suspend-to-RAM → wait for Wi-Fi
+        end
     end
 ```
 
@@ -343,8 +353,9 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
 
 1. **Install the extension.** Mount the Kindle over USB and copy
    `extensions/kindletodo/` to `/mnt/us/extensions/kindletodo/`. The frontlight
-   (`FLINTENSITY`, 0 = off … 24 = max, **default 0**) and poll `INTERVAL` default
-   in `bin/boot-image.sh` but are overridable per-device in `bin/config.local`;
+   (`FLINTENSITY`, 0 = off … 24 = max, **default 0**), poll `INTERVAL`, time
+   zone, night window and battery cadence all have defaults in the scripts but
+   are overridable per-device in `bin/config.local` (see `bin/config.example.sh`);
    the **token is not committed** — it's provisioned separately (step 4).
 
 2. **Enable SSH.** In KUAL, enable **USBNetLite** (over Wi-Fi). Change its
@@ -373,8 +384,9 @@ wrangler kv namespace create MS_TOKEN_STORE   # add the id to wrangler.jsonc, un
    full-screen list. It now updates itself forever.
 
 > **Power:** run it from a **wall charger**, not a computer's USB port
-> (a USB-data connection interferes with Wi-Fi SSH). In kiosk mode the device
-> stays awake to poll, so keep it powered.
+> (a USB-data connection interferes with Wi-Fi SSH). By day on the charger the
+> device stays awake to poll every 15 s; at night and on battery it sleeps
+> between polls — see [Power & battery](#power--battery).
 
 **Revert to a normal Kindle:** the quick escape hatch is the `DISABLE` flag
 (drop a file over USB — no shell needed); to remove it for good, delete the boot
@@ -384,7 +396,8 @@ service. See [Resilience & recovery](#resilience--recovery).
 
 ## Using it
 
-- **See it:** the Kindle shows the list; it redraws within ~15 s of a change.
+- **See it:** the Kindle shows the list; it redraws within ~15 s of a change by
+  day. Between 22:30 and 06:00 it only checks once an hour, on the hour.
 - **Choose the list:** open `https://<yourdomain>/?t=<TODO_TOKEN>`
   on any device and pick which To Do list the Kindle serves; the wall follows on
   its next poll.
@@ -395,6 +408,41 @@ service. See [Resilience & recovery](#resilience--recovery).
 - **Adjust brightness:** the frontlight defaults to **off**. Easiest: set
   `KINDLE_FLINTENSITY=<0-24>` in `.env` and run `scripts/kindle.sh deploy`.
   Live (no redeploy): `scripts/kindle.sh ssh 'lipc-set-prop com.lab126.powerd flIntensity <0-24>'`.
+
+### Power & battery
+
+An awake i.MX6 with an associated radio empties the 1500 mAh cell in about a
+day. Suspended to RAM it draws a few mA, so `image-loop.sh` picks a cadence from
+the clock and the PMIC's charger state and **suspends between the slow polls**,
+waking on an RTC alarm:
+
+| When | Poll cadence | Between polls |
+|------|--------------|---------------|
+| Daytime, on the charger | every 15 s (`INTERVAL`) | awake |
+| **Night, 22:30 → 06:00** (any power state) | **hourly, on the hour** (+90 s, `NIGHT_OFFSET`) | suspended |
+| Daytime, discharging | every 5 min (`BATTERY_INTERVAL`) | suspended |
+| Discharging below 20 % (`BATT_THRESHOLD`) | every 15 min (`BATTERY_LOW_INTERVAL`); "battery low" screen; frontlight forced off | suspended |
+| Discharging at 5 % (`BATT_CRITICAL`) | `sync`, user store read-only, clean power-off | off |
+
+Night times are local (`TZ`, default Copenhagen). The +90 s offset lets the
+00:00 wake see the daily `*` tasks the Worker's midnight cron reopens; set
+`NIGHT_OFFSET=0` for exactly on the hour. All of it is per-device config
+(`bin/config.example.sh`), or `KINDLE_<NAME>` in `.env` for `deploy`/`stage-usb`.
+
+Two things to know:
+
+- **A suspended Kindle has no SSH.** With the defaults that means no
+  `scripts/kindle.sh` at night or on battery. `SUSPEND=0` keeps the same
+  cadences but never sleeps, if you'd rather trade battery for access.
+- **Suspend degrades safely.** If the RTC alarm or `/sys/power/state` isn't
+  usable the loop logs it once and sleeps awake instead — the old behaviour.
+  The hourly `battery N% <status> <µA>` line in `image.log` is the discharge
+  meter: unplug for a few hours and read the slope.
+
+Rough expectations on a full cell: about a day always-awake, 1–2 weeks
+suspending at the 5-minute cadence, 2–3 weeks at 15 minutes. Measure — the
+suspend path was written against the kernel interfaces, not yet timed on the
+wall unit.
 
 ---
 
@@ -517,8 +565,8 @@ failures. How the common scenarios play out:
 
 | Scenario | What happens | What to do |
 |----------|--------------|------------|
-| **Battery drain / power cut** | Screen keeps showing the last list (e-ink holds it with no power). On re-plugging it boots and redraws itself. | Nothing — it self-heals. Run it off a wall charger. |
-| **Frontlight annoying** | It's the light, not the silent image. | Default is already **off** (`FLINTENSITY=0`). Set it live or in `config.local`. Or shut down — e-ink keeps the image. **Avoid a short power-press (sleep):** an unchanged list returns `304`, so the loop won't repair a cleared/sleep screen until the todos actually change. |
+| **Charger unplugged / power cut** | The loop notices `Discharging`, slows to 5-min polls and suspends between them (days, not a day — see [Power & battery](#power--battery)). Under 20 % it draws **"Battery low 🔌"**; at 5 % it syncs and powers off cleanly, leaving that screen on the panel. On re-plugging it boots and redraws itself. | Nothing — it self-heals. Run it off a wall charger. |
+| **Frontlight annoying** | It's the light, not the silent image. | Default is already **off** (`FLINTENSITY=0`). Set it live or in `config.local`. Or shut down — e-ink keeps the image. **Avoid a short power-press (sleep):** an unchanged list returns `304`, so the loop won't repair a cleared/sleep screen until the todos actually change. (The loop's own night/battery suspend doesn't touch the panel.) |
 | **Microsoft/Graph down** | Worker keeps serving the last-good list for ~5 min, then renders a "not responding 😵" / "sign-in expired 🔑" screen. | Usually self-heals. "Sign-in expired" needs a new refresh token (see decommission/setup). |
 | **Wi-Fi changes** (new password / router / house) | No network → after ~1 min the device draws its local **"No Wi-Fi 😢"** screen (instead of freezing silently). X is stopped, so there's no UI to rejoin, and SSH runs over Wi-Fi. | Easiest: keep the **same SSID + password** when swapping routers and it just reconnects. Otherwise use the **`DISABLE` escape hatch** below to get the normal UI back and rejoin Wi-Fi. |
 | **Wi-Fi gone but nothing changed** | Same "No Wi-Fi 😢" screen, but the network is fine — the Kindle's Wi-Fi stack occasionally wedges and stops seeing networks that are broadcasting normally. (Sanity-check from a laptop that the **2.4 GHz** band is visible — Kindles can't see 5 GHz-only networks, and some can't see channels 12/13.) | **Hard-restart the Kindle:** hold the power button ~40 s until it reboots (sleep/wake is not enough). It reconnects on its own. |

@@ -93,9 +93,13 @@ FWID); the silkscreened part could be a Cypress- or Broadcom-marked equivalent.
 | Charging | micro-USB (i.MX6 USB PHY / VBUS); no wireless charging |
 | Waterproofing | IPX8 (retail spec — the reason the wall unit shrugs off hallway humidity) |
 
-In kiosk mode the device never sleeps (`preventScreenSaver=1`) but e-ink only
-draws power on redraw, so it idles at load ~0.06 with the radio as the main
-consumer.
+By day on the charger the kiosk stays awake (`preventScreenSaver=1`, powerd's
+own suspend is off) but e-ink only draws power on redraw, so it idles at load
+~0.06 with the radio as the main consumer. At night and on battery
+`image-loop.sh` suspends to RAM between polls, waking on an RTC alarm
+(`/sys/class/rtc/rtcN/wakealarm`, relative form, rtc1 tried before rtc0), and
+powers off cleanly at 5 % so a drained cell isn't an unclean power loss on the
+ext3 user store.
 
 ## Software stack (as jailbroken)
 

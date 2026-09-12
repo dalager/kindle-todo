@@ -7,8 +7,8 @@
 #   extensions/kindletodo/      -> <KINDLE>/extensions/kindletodo/   (incl. the Upstart unit)
 #   fbink                       -> <KINDLE>/libkh/bin/fbink          (image-loop.sh hardcodes this path)
 #   usbnetlite installer (.bin) -> <KINDLE>/mrpackages/               (staged; INSTALL happens on-device)
-#   bin/config.local            -> the token (+ frontlight) from .env, so the board
-#                                  can draw WITHOUT SSH ever existing
+#   bin/config.local            -> the token (+ frontlight, night/battery cadence)
+#                                  from .env, so the board can draw WITHOUT SSH ever existing
 #   install scriptlet           -> <KINDLE>/documents/KindleTodo-Install.sh — shows up
 #                                  as a book; opening it installs the Upstart job
 #                                  AS ROOT (hdnext scriptlets run as root — verified
@@ -118,7 +118,12 @@ ok "extensions/kindletodo/ (incl. kindletodo.upstart.conf)"
 if [ -n "${TODO_TOKEN:-}" ]; then
   {
     printf 'TODO_TOKEN="%s"\n' "$TODO_TOKEN"
-    [ -n "${KINDLE_FLINTENSITY:-}" ] && printf 'FLINTENSITY=%s\n' "$KINDLE_FLINTENSITY"
+    # Optional KINDLE_<NAME> values from .env become <NAME> in config.local.
+    for v in FLINTENSITY TZ NIGHT_START NIGHT_END NIGHT_OFFSET \
+             BATTERY_INTERVAL BATTERY_LOW_INTERVAL BATT_THRESHOLD BATT_CRITICAL SUSPEND; do
+      eval "val=\${KINDLE_$v:-}"
+      if [ -n "$val" ]; then printf '%s="%s"\n' "$v" "$val"; fi
+    done
   } > "$DEST/bin/config.local"
   ok "bin/config.local (token from .env)"
 else

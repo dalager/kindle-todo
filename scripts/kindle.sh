@@ -39,10 +39,15 @@ case "$cmd" in
     BASE_URL="${BASE_URL:-https://todo.dalagerlabs.com}"
     echo "Copying scripts to $KINDLE_IP:$DEVDIR/bin/ ..."
     kscp "$ROOT"/extensions/kindletodo/bin/*.sh "root@$KINDLE_IP:$DEVDIR/bin/"
-    echo "Writing device config (token, frontlight) ..."
+    echo "Writing device config (token, frontlight, cadence) ..."
     {
       printf 'TODO_TOKEN="%s"\n' "$TODO_TOKEN"
-      if [ -n "${KINDLE_FLINTENSITY:-}" ]; then printf 'FLINTENSITY=%s\n' "$KINDLE_FLINTENSITY"; fi
+      # Optional KINDLE_<NAME> values from .env become <NAME> in config.local.
+      for v in FLINTENSITY TZ NIGHT_START NIGHT_END NIGHT_OFFSET \
+               BATTERY_INTERVAL BATTERY_LOW_INTERVAL BATT_THRESHOLD BATT_CRITICAL SUSPEND; do
+        eval "val=\${KINDLE_$v:-}"
+        if [ -n "$val" ]; then printf '%s="%s"\n' "$v" "$val"; fi
+      done
     } | kssh "cat > $DEVDIR/bin/config.local && chmod 600 $DEVDIR/bin/config.local"
     # Pre-download the error screens the device draws when the Worker is
     # unreachable (rendered by the Worker so they match the real look).

@@ -41,6 +41,11 @@ export TZ="${TZ:-CET-1CEST,M3.5.0,M10.5.0/3}"
 # Let boot + Wi-Fi settle (Wi-Fi associates during startup).
 sleep 20
 
+# image-loop.sh turns the radio off across suspends via the airplane-mode flag,
+# which PERSISTS across reboots. A power cut or hard reset while asleep must
+# not boot us into airplane mode, so force it on here, unconditionally.
+lipc-set-prop com.lab126.cmd wirelessEnable 1 2>/dev/null
+
 # Clock sanity. The RTC lives in the BD71827 PMIC and is backed by the MAIN
 # battery (no coin cell), so a full discharge resets the clock — and a wrong
 # clock fails every TLS cert check, which looks exactly like "no Wi-Fi" and

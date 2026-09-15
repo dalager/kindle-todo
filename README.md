@@ -569,9 +569,44 @@ failures. How the common scenarios play out:
 | **Frontlight annoying** | It's the light, not the silent image. | Default is already **off** (`FLINTENSITY=0`). Set it live or in `config.local`. Or shut down — e-ink keeps the image. **Avoid a short power-press (sleep):** an unchanged list returns `304`, so the loop won't repair a cleared/sleep screen until the todos actually change. (The loop's own night/battery suspend doesn't touch the panel.) |
 | **Microsoft/Graph down** | Worker keeps serving the last-good list for ~5 min, then renders a "not responding 😵" / "sign-in expired 🔑" screen. | Usually self-heals. "Sign-in expired" needs a new refresh token (see decommission/setup). |
 | **Wi-Fi changes** (new password / router / house) | No network → after ~1 min the device draws its local **"No Wi-Fi 😢"** screen (instead of freezing silently). X is stopped, so there's no UI to rejoin, and SSH runs over Wi-Fi. | Easiest: keep the **same SSID + password** when swapping routers and it just reconnects. Otherwise use the **`DISABLE` escape hatch** below to get the normal UI back and rejoin Wi-Fi. |
-| **Wi-Fi gone but nothing changed** | Same "No Wi-Fi 😢" screen, but the network is fine — the Kindle's Wi-Fi stack occasionally wedges and stops seeing networks that are broadcasting normally. (Sanity-check from a laptop that the **2.4 GHz** band is visible — Kindles can't see 5 GHz-only networks, and some can't see channels 12/13.) | **Hard-restart the Kindle:** hold the power button ~40 s until it reboots (sleep/wake is not enough). It reconnects on its own. |
+| **Wi-Fi gone but nothing changed** | Same "No Wi-Fi 😢" screen, but the network is fine. Almost always the post-suspend handshake race described in [Wi-Fi after suspend](#wi-fi-after-suspend--a-failure-class-every-kindle-dashboard-hits): the router deauthed the Kindle and `wifid` deleted the saved profile. (Sanity-check from a laptop that the **2.4 GHz** band is visible — Kindles can't see 5 GHz-only networks.) | Self-heals when `WIFI_SSID`/`WIFI_PSK` are in `config.local`: the loop re-creates the profile and joins; `image.log` shows `wifi: no profile ... recreating` then `wifi up after Ns`. If it is still stuck after `REBOOT_AFTER_FAILS` failed joins it reboots itself; last resort, hard-restart (hold power ~40 s) and rejoin in Settings via the `DISABLE` flag. |
 | **Bad deploy / wrong token** | Device draws **"Server not found 🧭"** (404) or **"token mismatch 🔒"** (401) after ~1 min. | Fix the deploy / re-run `scripts/kindle.sh deploy`. |
 | **Boots to the stock home screen** (no board, KUAL *and* KOReader open blank, SSH refused) | `/mnt/us` is not mounting, so every part of the kiosk is gone at once. Tell-tale: Settings → Device Info shows **`0.02 GB of 0.48 GB`** — that's the ~493 MB *root* partition, not the ~6.2 GB user store. Usually ext3 damage from an unclean power loss. | In-place repair is blocked (KUAL blank, no SSH, usbnet holds the USB gadget so no drive appears). See [Recovery — rebuilding the Kindle](docs/recovery-rebuild.md). |
+
+### Wi-Fi after suspend — a failure class every Kindle dashboard hits
+
+If you suspend-to-RAM (`echo mem > /sys/power/state`) with the radio **associated**,
+the Broadcom driver fast-reassociates on resume before it has told wpa_supplicant.
+The router's first 4-way-handshake frame arrives too early, the Kindle's ancient
+supplicant drops it (upstream fixed this in 2017 — hostap "Fix delayed EAPOL RX
+frames" — Amazon never shipped the fix), and the router deauthenticates with reason
+15, "4-way handshake timeout". Amazon's `wifid` reads reason 15 as **"Bad password"**,
+lowers the saved network's priority on each occurrence, and after about three
+**deletes the profile outright**. From then on nothing reconnects until a human
+retypes the password in Settings. Retrying harder (`wpa_cli reassociate`,
+`disconnect`/`reconnect`, `wifid enable 0/1`) makes it worse: every extra attempt
+inside the bad window is another strike.
+
+What works, and what every long-running battery dashboard does:
+
+- **Radio off before suspend, on after wake**, then wait for
+  `lipc-get-prop com.lab126.wifid cmState` to read `CONNECTED`, so every wake is a
+  clean, supplicant-driven join (`WIFI_RADIO_OFF=1`, the default).
+- **Never suspend on the charger** at all (`SUSPEND_ON_CHARGER=0`, the default). An
+  associated radio that never resumes never fails.
+- Keep the SSID and password on the device (`WIFI_SSID` / `WIFI_PSK` in
+  `config.local`). If `cmState` ever sits in `READY` (enabled, idle = no profile),
+  re-create it with `lipc-hash-prop com.lab126.wifid createProfile` and
+  `lipc-set-prop com.lab126.cmd ensureConnection wifi:<SSID>` — the same calls the
+  Settings screen makes. `image-loop.sh` does this after 8 s of `READY`.
+- Airplane mode (`com.lab126.cmd wirelessEnable`) **persists across reboots**, so
+  `boot-image.sh` forces it back to 1 unconditionally.
+- Router side, if you control it: turn off "Roaming Assistant" (it kicks weak
+  clients mid-handshake) and consider disabling 802.11ax on 2.4 GHz. Verify with the
+  router's own log: no new "4-way handshake timeout" lines for the Kindle's MAC.
+- Reading the device's logs without SSH: drop the `DISABLE` flag (below), boot to the
+  normal UI, type `;dm` in the home-screen search box; the syslog, netlog and
+  wpa_supplicant logs land in `documents/`.
 
 ### The `DISABLE` escape hatch
 

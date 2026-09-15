@@ -44,7 +44,8 @@ case "$cmd" in
       printf 'TODO_TOKEN="%s"\n' "$TODO_TOKEN"
       # Optional KINDLE_<NAME> values from .env become <NAME> in config.local.
       for v in FLINTENSITY TZ NIGHT_START NIGHT_END NIGHT_OFFSET \
-               BATTERY_INTERVAL BATTERY_LOW_INTERVAL BATT_THRESHOLD BATT_CRITICAL SUSPEND; do
+               BATTERY_INTERVAL BATTERY_LOW_INTERVAL BATT_THRESHOLD BATT_CRITICAL SUSPEND \
+               WIFI_SSID WIFI_PSK GATEWAY WIFI_WAIT WIFI_RADIO_OFF SUSPEND_ON_CHARGER REBOOT_AFTER_FAILS; do
         eval "val=\${KINDLE_$v:-}"
         if [ -n "$val" ]; then printf '%s="%s"\n' "$v" "$val"; fi
       done

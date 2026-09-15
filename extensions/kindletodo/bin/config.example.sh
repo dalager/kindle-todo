@@ -59,5 +59,30 @@ TODO_TOKEN="your-token-here"
 # set explicitly if the log says "no usable RTC wakealarm".
 # RTC="/sys/class/rtc/rtc1"
 
-# Seconds to wait for Wi-Fi to reassociate after a resume (default 30).
-# WIFI_WAIT=30
+# --- Wi-Fi recovery ---------------------------------------------------------
+# The radio does not reliably reassociate after a resume, so image-loop.sh
+# escalates: force-connect the saved profile (needs WIFI_SSID; no password —
+# the profile you joined in Settings is reused), wpa_cli reassociate,
+# disconnect/reconnect, radio off/on. Seconds to keep trying (default 60).
+# WIFI_SSID="MyNetwork"
+# WIFI_PSK="the-password"   # lets the loop re-create the profile wifid deletes after
+#                           # a few failed handshakes ("Bad password"); without it a
+#                           # human has to retype the password in Settings
+# WIFI_WAIT=60
+
+# Default gateway to restore when wifid says CONNECTED but the route is gone
+# after a resume (a known Kindle quirk). Leave unset to skip.
+# GATEWAY="192.168.1.1"
+
+# Radio off before every suspend, on after wake, then a clean supplicant-driven
+# join (default 1). Suspending with the radio associated races the router's
+# handshake on resume, and a few lost races make wifid delete the profile.
+# WIFI_RADIO_OFF=1
+
+# Never suspend while charging (default 0 = sleep awake on the charger). On the
+# wall power is free and an associated radio that never resumes never fails.
+# SUSPEND_ON_CHARGER=0
+
+# Reboot after this many consecutive polls with the Wi-Fi stack provably down
+# (default 6). Worker/ISP outages never count. 0 disables.
+# REBOOT_AFTER_FAILS=6

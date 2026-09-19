@@ -74,15 +74,16 @@ TODO_TOKEN="your-token-here"
 # after a resume (a known Kindle quirk). Leave unset to skip.
 # GATEWAY="192.168.1.1"
 
-# Radio off before every suspend, on after wake, then a clean supplicant-driven
-# join (default 1). Suspending with the radio associated races the router's
-# handshake on resume, and a few lost races make wifid delete the profile.
-# WIFI_RADIO_OFF=1
+# Radio off before every suspend, on after wake (default 0 = OFF). Sounds right,
+# and other Kindle dashboards do it, but on the PW4/5.18 the chip does not come
+# back after the toggle around a suspend and wifid crash-loops for a day
+# (2026-09-17). Leave off unless you have verified it on your device.
+# WIFI_RADIO_OFF=0
 
 # Never suspend while charging (default 0 = sleep awake on the charger). On the
 # wall power is free and an associated radio that never resumes never fails.
 # SUSPEND_ON_CHARGER=0
 
 # Reboot after this many consecutive polls with the Wi-Fi stack provably down
-# (default 6). Worker/ISP outages never count. 0 disables.
-# REBOOT_AFTER_FAILS=6
+# (default 0 = never). Warm reboots did not clear a wedged stack on the PW4.
+# REBOOT_AFTER_FAILS=0

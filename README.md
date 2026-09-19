@@ -602,11 +602,16 @@ retypes the password in Settings. Retrying harder (`wpa_cli reassociate`,
 `disconnect`/`reconnect`, `wifid enable 0/1`) makes it worse: every extra attempt
 inside the bad window is another strike.
 
-What works, and what every long-running battery dashboard does:
+What works here (PW4, firmware 5.18, Broadcom bcmdhd 7.45.102.16):
 
-- **Radio off before suspend, on after wake**, then wait for
-  `lipc-get-prop com.lab126.wifid cmState` to read `CONNECTED`, so every wake is a
-  clean, supplicant-driven join (`WIFI_RADIO_OFF=1`, the default).
+- **Not touching the Wi-Fi stack around a suspend is necessary but not sufficient.**
+  `wpa_cli disconnect/reconnect`, `wifid enable 0/1` and the radio-off-before-suspend
+  pattern (`cmd wirelessEnable 0/1`) each made things worse, but the untouched
+  design wedges too, just later: a raw `echo mem` resume re-registers `wlan0` under
+  wifid's feet on every cycle. See the [outage log](#wi-fi-outage-log--read-this-before-changing-the-wi-fi-code-again)
+  below before choosing a design. `WIFI_RADIO_OFF` exists and defaults to 0.
+- **Fix the deauths at the router** instead: Roaming Assistant off, and consider
+  802.11ax off on 2.4 GHz. Zero handshake timeouts since, on this network.
 - **Never suspend on the charger** at all (`SUSPEND_ON_CHARGER=0`, the default). An
   associated radio that never resumes never fails.
 - Keep the SSID and password on the device (`WIFI_SSID` / `WIFI_PSK` in
@@ -616,12 +621,89 @@ What works, and what every long-running battery dashboard does:
   Settings screen makes. `image-loop.sh` does this after 8 s of `READY`.
 - Airplane mode (`com.lab126.cmd wirelessEnable`) **persists across reboots**, so
   `boot-image.sh` forces it back to 1 unconditionally.
-- Router side, if you control it: turn off "Roaming Assistant" (it kicks weak
-  clients mid-handshake) and consider disabling 802.11ax on 2.4 GHz. Verify with the
-  router's own log: no new "4-way handshake timeout" lines for the Kindle's MAC.
+- Verify at the router: no new "4-way handshake timeout" lines for the Kindle's MAC.
+- If the loop's `wifi diag` line shows a garbage `wirelessEnable` value (a five-digit
+  number instead of 0/1) and `cmState` empty, `wifid` is in the crash loop. Reboots do
+  not fix it; on this unit it has only ever come back after a USB/charger plug event.
+  The loop leaves dmesg/syslog/netlog/wpa dumps in `extensions/kindletodo/logs/`.
 - Reading the device's logs without SSH: drop the `DISABLE` flag (below), boot to the
   normal UI, type `;dm` in the home-screen search box; the syslog, netlog and
   wpa_supplicant logs land in `documents/`.
+
+### Wi-Fi outage log — read this before changing the Wi-Fi code again
+
+One week, four "root causes", four fixes, four more outages. This section is the
+single place the problem is tracked so the next session does not start from a
+theory. Add a row per incident; do not delete rows. Evidence lives in
+`extensions/kindletodo/logs/` (auto-dumps on every failed join), `image.log`, and
+the `;dm` dumps in `documents/` on the device (Sep 15 and Sep 17 cover Sep 12–17).
+
+| Date (CEST) | Loop design on the device | What happened | What was concluded then | What the logs actually show |
+|---|---|---|---|---|
+| Sep 12 21:37 | v1: raw `echo mem` suspend, no Wi-Fi pokes (df3f33b) | First death after ~80 five-minute cycles. wifid `wmgr` thread failed, respawned, `Supplicant timed out`, crash loop; dead until Settings rejoin next evening. | "AP dropped the device" | **Every** resume that afternoon logged `iwbrcm: Received error on genericScan socket` right after `Register interface [wlan0]`. The 80 cycles were not clean; they were the fuse burning. |
+| Sep 13 23:12 | v1 | Died on the first night-mode resume. | Handshake race → wifid deletes the profile | True as far as it goes (router `reason=15` deauths were real) but it was the second layer, not the first. |
+| Sep 15 21:51 | v2: recovery ladder + radio-off-across-suspend (c42613c), router ADR-0006 | Scan-socket errors from 21:34, `DISCONNECT` timed out 21:51, `ThreadFatal`, 28 wifid crashes on Sep 16, 6 warm reboots (auto + manual) changed nothing. 33 h dead. | "wifid crash loop / wedged bcmdhd, distinct failure class" | Same signature as Sep 12, just a shorter fuse. Warm reboots each started a fresh wifid + wpa_supplicant and it still crawled: wpa_supplicant init that takes <1 s when healthy took 10–34 s. |
+| Sep 17 06:28 | v2 | **Recovered** within 90 s of a laptop USB plug. | "USB/charger plug un-sticks it" | Exact chain: `usb_gadget_state_work: request high bus` → kernel unloads/reloads bcmdhd → wifid `spectator:wakeup driver=unavailable` → **new** wpa_supplicant, initialised in <1 s → loop's READY→createProfile fired → joined. |
+| Sep 17 ~08:00 | v2 | Wedged on the first battery cycle after a healthy 07:38 boot. | "Radio-off toggle is the trigger; revert to v1" | v1 wedged the same evening (next row), so the toggle was not the trigger. |
+| Sep 17 18:31 | v2 | Recovered on a laptop USB plug again. | | Same chain as 06:28. |
+| Sep 17 ~20:00 | v3: v1 behaviour + profile re-creation + curl caps + log dumps (uncommitted) | 13 clean cycles (`wifi up after 3s`), then `wifi not up after 60s`, cycle time stretched to 25–30 min, never recovered. Charger on at 05:39 Sep 18 (mode `awake`, 100 % Full) did **not** recover it. Laptop USB at 19:15 Sep 18 did not either (by 19:40). | | wifid alive all day (one PID, no crash loop), stuck in `state=Searching`, **no wpa_supplicant log at all** (`tinyrot: No file to rotate`), lipc reads take 1.6 s, cmState `PENDING` forever so the loop's READY rule never fires. A wall charger is not a USB host: no `request high bus`. |
+
+**Facts (from logs, not theory):**
+
+- A raw `echo mem > /sys/power/state` powers the chip down (`gpio 47 off`) and on
+  resume re-downloads firmware and re-registers `wlan0` as a new interface.
+  Amazon's `wifid`/`wpa_supplicant` are not told; wifid's scan socket goes stale
+  every single resume (`genericScan socket` error), and the driver's own
+  fast-reassociate hides it until a control command times out. Stock firmware
+  never suspends with Wi-Fi in this state: powerd tells wifid first, wifid unloads
+  the driver, and on wake wifid reloads it and starts a fresh supplicant. That
+  stock path is exactly what ran at the 06:28 recovery.
+- In the wedged state the whole userspace is slow, not just Wi-Fi: wpa_supplicant
+  prints one line per second, lipc property reads take 1.6–8 s, a poll cycle takes
+  25–30 minutes instead of 5. Warm reboots re-enter the slow state within minutes.
+- Nothing this repo does has ever un-wedged it. Both recoveries followed a laptop
+  USB connection (`request high bus` + bcmdhd reload); a wall charger did not do it
+  on Sep 18; five warm reboots and one cold boot did not do it on Sep 15–17.
+- Router ADR-0006 removed the handshake-timeout deauths (0 since Sep 15). Keep it.
+- Between Jul 14 and Sep 12 the loop never suspended and the device was stable
+  apart from one wedge on Aug 6. Suspend was introduced on Sep 12; every outage
+  since has been on a battery-mode or night-mode suspend cycle. Awake on the
+  charger (`SUSPEND_ON_CHARGER=0`) has a clean record.
+
+**Open hypotheses, ranked, each with the test that settles it:**
+
+1. *The i.MX6 bus-frequency driver.* With `powersave` (396 MHz) and the display
+   stack stopped, the SoC drops DDR/AHB to low-bus mode; SDIO traffic to the
+   Broadcom chip then times out, wifid/wpa_supplicant crawl. USB host attach is
+   the only thing on this device that requests high bus. Test over SSH: read
+   `/sys/bus/platform/drivers/imx6_busfreq/*/enable` (or the `busfreq` node the
+   4.1.15-lab126 kernel exposes) in the wedged state, set it to 0 (scaling off),
+   watch whether lipc latency drops and wifid scans again. Then the cheap test:
+   `ondemand` governor instead of `powersave` for a night of battery cycles.
+2. *Suspend must go through wifid.* Reproduce the stock path: before `echo mem`,
+   ask wifid to power down (`lipc-set-prop com.lab126.wifid enable 0` is **not** it —
+   it shuts wifid down entirely; the candidate is powerd's own suspend,
+   `lipc-set-prop com.lab126.powerd ...` / the `spectator` wakeup event) and let
+   wifid reload the driver on wake. Sep 15's `cmd wirelessEnable 0/1` was a
+   different, airplane-mode path and is not this test.
+3. *Wedge detector + the lightest reset that works.* Signature is unambiguous:
+   `wifi diag` shows a five-digit `wirelessEnable`, empty `cmState`, and lipc >1 s.
+   Candidates, untested because nothing has had a shell on a wedged device yet:
+   `initctl restart wifid`; `rmmod bcmdhd && insmod …` (what the USB event does);
+   40 s power-button hold (PMIC reset, the only thing known to clear everything).
+
+**Rules for the next change (this is how the circle gets broken):**
+
+- One variable per night. Say in this table which one, before the night, not after.
+- No Wi-Fi change ships without a bench test first: SSH over Wi-Fi works when the
+  device is healthy (`usbnetlite` has `USE_WIFI=true`, port 22); run the loop with
+  `BATTERY_INTERVAL=60` on the bench and watch `netlog`/`dmesg` live for 30 cycles.
+  An overnight run is a confirmation, not the experiment.
+- Read `logs/` and `image.log` before forming a theory. Every wrong turn this week
+  came from acting on the previous session's conclusion instead of the device.
+- Stop-gap that needs no new code: `SUSPEND=0` in `config.local`. Awake on battery
+  draws 30–45 mA, so a charger-off period of a day is fine and no suspend means no
+  wedge. Use it until hypothesis 1 or 2 is verified on hardware.
 
 ### The `DISABLE` escape hatch
 
@@ -684,9 +766,22 @@ Two git-ignored env files, plus the device's own config — all excluded by
 `TODO_TOKEN` must be identical across all three **and** the deployed Cloudflare
 secret.
 
-**Finding `KINDLE_IP`:** the device runs a Dropbear SSH server on port 22 —
-`nmap -p22 --open 192.168.1.0/24`, or check your router's DHCP leases. Save it in
-`.env` once. **`KINDLE_SSH_PASS`** is the USBNetLite root password
+**Finding `KINDLE_IP`** (currently `192.168.1.45`, as of Aug 2026 — DHCP can
+move it): the device runs a Dropbear SSH server on port 22 —
+`nmap -p22 --open 192.168.1.0/24`, or check your router's DHCP leases. No nmap?
+Ping-sweep to fill the ARP table, then look for the Amazon MAC prefix
+(`44:00:49:…` on this unit):
+
+```sh
+for i in $(seq 1 254); do (ping -c1 -W1 192.168.1.$i >/dev/null 2>&1 &); done
+sleep 3; ip neigh | grep -i '44:00:49'
+```
+
+Beware: the Kindle often **doesn't answer ping** (power-save Wi-Fi) even when
+SSH works — the ping is only there to provoke ARP. Confirm with a TCP probe:
+`timeout 3 bash -c 'echo > /dev/tcp/192.168.1.45/22' && echo up`. Save the IP in
+`.env` once (a DHCP reservation in the router stops it drifting).
+**`KINDLE_SSH_PASS`** is the USBNetLite root password
 (`/mnt/us/usbnetlite/etc/config` on the device).
 
 **Rotating the token** (do all four so nothing 401s for long):

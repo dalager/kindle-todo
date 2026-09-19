@@ -102,12 +102,12 @@ mkdir -p "$DEST"
 if command -v rsync >/dev/null 2>&1; then
   rsync -rt --modify-window=2 --delete \
     --exclude 'config.local' --exclude 'DISABLE' --exclude 'assets/' \
-    --exclude 'image.log' --exclude 'image.log.*' \
+    --exclude 'image.log' --exclude 'image.log.*' --exclude 'logs/' \
     "$ROOT/extensions/kindletodo/" "$DEST/"
 else
   warn "rsync not found — copying without --delete (stale files on the device are left alone)"
   ( cd "$ROOT/extensions/kindletodo" && find . -type f \
-      ! -name config.local ! -name DISABLE ! -path './assets/*' ! -name 'image.log*' \
+      ! -name config.local ! -name DISABLE ! -path './assets/*' ! -path './logs/*' ! -name 'image.log*' \
       -exec cp --parents {} "$DEST/" \; )
 fi
 chmod +x "$DEST/bin/"*.sh 2>/dev/null || true   # no-op on FAT, harmless

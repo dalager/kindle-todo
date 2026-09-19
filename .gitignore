@@ -34,3 +34,6 @@ worker/.swarm/ruvnet-brain-learn
 # Third-party binaries fetched by scripts/stage-usb.sh (see VENDORING note there)
 vendor/
 .swarm
+ruvector.db
+memories.md
+extensions/kindletodo/logs/

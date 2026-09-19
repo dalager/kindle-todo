@@ -17,13 +17,9 @@
 #   low      discharging < BATT_THRESHOLD  every BATTERY_LOW_INTERVAL (15 min), suspended between polls
 #   night    NIGHT_START..NIGHT_END        once an hour, on the hour (+NIGHT_OFFSET s), suspended between polls
 #
-# "Suspended" is suspend-to-RAM with an RTC wake alarm — an awake i.MX6 with an
-# associated radio is what empties the 1500 mAh cell in about a day; asleep it
-# draws a few mA. If the RTC alarm or /sys/power/state isn't usable we fall back
-# to sleeping awake, i.e. exactly the old behaviour. Discharging below
-# BATT_CRITICAL we sync and power off cleanly instead of letting the PMIC cut
-# power mid-write (ext3 on the user store — see docs/recovery-rebuild.md); the
-# e-ink keeps the "battery low" screen visible while off.
+# "Suspended" = suspend-to-RAM with an RTC wake alarm (awake with the radio on
+# empties the cell in a day; asleep it draws a few mA). No usable alarm =>
+# sleep awake. Below BATT_CRITICAL we power off cleanly (ext3 user store).
 #
 # Usage: image-loop.sh <url> [interval_seconds]
 # Everything else is read from the environment (boot-image.sh exports config.local).
@@ -65,7 +61,9 @@ SUSPEND="${SUSPEND:-1}"    # 0 = never suspend, just sleep awake between polls
 RTC="${RTC:-}"             # e.g. /sys/class/rtc/rtc1; auto-detected when empty
 SUSPEND_MIN=45             # naps shorter than this aren't worth a resume + Wi-Fi reassociation
 WIFI_WAIT="${WIFI_WAIT:-60}"  # seconds to wait for Wi-Fi after a resume (a fresh join takes 5-20)
-WIFI_RADIO_OFF="${WIFI_RADIO_OFF:-1}"   # 1 = radio off across every suspend, fresh join after wake (see wait_wifi)
+WIFI_RADIO_OFF="${WIFI_RADIO_OFF:-0}"   # 1 = radio off across suspend. OFF by default: on the PW4 (5.18,
+                                        # bcmdhd fw 7.45.102.16) the chip never reloads after the on/off
+                                        # around a suspend and wifid crash-loops until a USB/power event.
 SUSPEND_ON_CHARGER="${SUSPEND_ON_CHARGER:-0}"  # 0 = never suspend while charging; sleep awake instead
 WIFI_SSID="${WIFI_SSID:-}"    # network to (re)join; set in config.local
 WIFI_PSK="${WIFI_PSK:-}"      # its password. wifid DELETES the saved profile after ~3 failed 4-way
@@ -73,10 +71,10 @@ WIFI_PSK="${WIFI_PSK:-}"      # its password. wifid DELETES the saved profile af
                               # right after a resume; with the PSK here the loop re-creates it.
 GATEWAY="${GATEWAY:-}"        # default route to restore if wifid says CONNECTED but the route is gone
 CURL_TIMEOUT="${CURL_TIMEOUT:-30}"
-# Consecutive polls with the Wi-Fi stack provably down (not CONNECTED after a
-# full wait_wifi) before a reboot. Upstream/Worker outages never count: the
-# Kindle can't fix those by rebooting. 0 disables.
-REBOOT_AFTER_FAILS="${REBOOT_AFTER_FAILS:-6}"
+# Consecutive polls with the Wi-Fi stack provably down before a reboot. OFF by
+# default: five warm reboots on 2026-09-16/17 never cleared a wedged stack (the
+# chip stays powered across `reboot`); they only cost flash writes.
+REBOOT_AFTER_FAILS="${REBOOT_AFTER_FAILS:-0}"
 FLINTENSITY="${FLINTENSITY:-0}"
 
 log() { echo "$(date) $*" >> "$LOG"; }
@@ -157,19 +155,17 @@ secs_to_next_hour() {
 
 # ---- Wi-Fi ------------------------------------------------------------------
 #
-# Failure class (README "Wi-Fi after suspend"): suspending with the radio
-# ASSOCIATED races the router's 4-way handshake on resume; the Kindle's old
-# supplicant drops the early frame, the router deauths (reason 15), and wifid
-# counts that as "Bad password" - deleting the profile after ~3 strikes. Every
-# extra reconnect attempt is another strike. So: radio OFF before suspend, ON
-# after wake, plain wait for a clean join; never poke the stack while PENDING;
-# if cmState sits in READY (idle = no profile) re-create it from WIFI_SSID/PSK.
+# See README "Wi-Fi after suspend". Rule learned the hard way (2026-09-12..17):
+# DO NOT poke the stack around a suspend - wpa_cli disconnect, wifid enable 0,
+# and cmd wirelessEnable 0/1 have each left wifid crash-looping for a day.
+# Let the driver reassociate by itself (80 clean resumes on 2026-09-12), keep
+# the router from deauthing (ADR-0006), and if cmState sits in READY (idle, no
+# profile) re-create the profile - the one intervention that has only helped.
 
 has_route() { route -n 2>/dev/null | grep -q '^0\.0\.0\.0'; }
 
-# Run a command with a hard cap in seconds. lipc calls into a wedged wifid have
-# been seen to block for ~25 s and ignore SIGTERM; the loop must not. (No
-# busybox `timeout`: its syntax varies across the versions Amazon ships.)
+# Hard cap in seconds. lipc calls into a wedged wifid block ~25 s and ignore
+# SIGTERM; the loop must not. (busybox `timeout` syntax varies; not used.)
 with_timeout() {
   t=$1; shift
   "$@" & p=$!
@@ -198,10 +194,8 @@ wifi_up() {
   return 1
 }
 
-# One line of what the Wi-Fi stack reports, for image.log, so the USB-mounted
-# log can localise an outage (radio off? no profile? associated but no IP?)
-# without a shell. Runs detached. Only scans when the radio is idle: a scan
-# takes the single radio off-channel and can abort a join in progress.
+# One line of what the Wi-Fi stack reports (radio off? no profile? no IP?).
+# Runs detached. Scans only when idle: a scan can abort a join in progress.
 wifi_diag() {
   w=$(lipc_get com.lab126.cmd wirelessEnable)
   e=$(lipc_get com.lab126.wifid enable)
@@ -216,10 +210,23 @@ wifi_diag() {
   log "wifi diag: wirelessEnable=$w enable=$e cmState=$st essid=$ess signal=$sig wlan0=$op ip=$ip gw=$gw scan=$scan"
 }
 
-# Re-create the saved profile (idempotent: wifid replaces one with the same
-# essid, and the re-creation resets the priority wifid has been lowering), then
-# ask the connection manager for it. Detached and capped; the hash goes in on
-# stdin so it lives in a script file.
+# On a failed join, copy what `;dm` would give us (dmesg, syslog, netlog,
+# wpa_supplicant) to the USB-visible partition. Max once per 30 min, keeps ~6.
+last_logdump=0
+dump_logs() {
+  now=$(date +%s); [ $(( now - last_logdump )) -ge 1800 ] || return 0
+  last_logdump=$now; d="$DIR/logs"; mkdir -p "$d" 2>/dev/null || return 0
+  t=$(date +%Y%m%d-%H%M%S)
+  { dmesg 2>/dev/null | tail -n 400; } > "$d/$t-dmesg.txt" 2>/dev/null
+  tail -n 600 /var/log/messages > "$d/$t-messages.txt" 2>/dev/null
+  tail -n 300 /var/log/netlog > "$d/$t-netlog.txt" 2>/dev/null
+  tail -n 300 /var/log/wpa_supplicant > "$d/$t-wpa.txt" 2>/dev/null
+  ls -1t "$d" 2>/dev/null | tail -n +25 | while read -r f; do rm -f "$d/$f"; done
+  log "logs dumped to logs/$t-*"
+}
+
+# Re-create the saved profile (idempotent; also resets the priority wifid has
+# been lowering) and ask the connection manager for it. Detached and capped.
 wifi_recreate_profile() {
   cat > /tmp/kindletodo-wifi.sh <<EOS
 echo '{essid="$WIFI_SSID", smethod="wpa2", secured="yes", psk="$WIFI_PSK"}' | lipc-hash-prop com.lab126.wifid createProfile
@@ -228,16 +235,14 @@ EOS
   ( with_timeout 25 sh /tmp/kindletodo-wifi.sh ) >/dev/null 2>&1 &
 }
 
-# Wait up to WIFI_WAIT s for a join, watching wifid's state rather than poking
-# it on a timer: PENDING = a join is in progress, leave it alone; READY for 8 s
-# = nothing to join, re-create the profile once; at 30 s still not up, one
-# radio off/on for a fresh join. Logs what it did and how long it took.
+# Wait up to WIFI_WAIT s watching wifid's state: PENDING = leave it alone;
+# READY 8 s = no profile, re-create once. Nothing else touches the stack.
 wifi_fail_streak=0
 wait_wifi() {
-  i=0; ready=0; recreated=""; cycled=""
+  i=0; ready=0; recreated=""
   while [ "$i" -lt "$WIFI_WAIT" ]; do
     if wifi_up; then
-      [ "$i" -gt 0 ] && log "wifi up after ${i}s${recreated:+ (profile recreated)}${cycled:+ (radio cycled)}"
+      [ "$i" -gt 0 ] && log "wifi up after ${i}s${recreated:+ (profile recreated)}"
       wifi_fail_streak=0; return 0
     fi
     if [ "$st" = "READY" ]; then ready=$((ready + 1)); else ready=0; fi
@@ -245,13 +250,10 @@ wait_wifi() {
       log "wifi: no profile (cmState READY for ${ready}s) - recreating $WIFI_SSID"
       wifi_recreate_profile; recreated=" "; ready=0
     fi
-    if [ "$i" -eq 30 ] && [ -z "$cycled" ]; then
-      log "wifi: not up at 30s (cmState=${st:-?}) - radio off/on"
-      radio 0; sleep 3; radio 1; cycled=" "
-    fi
     i=$((i + 1)); sleep 1
   done
   log "wifi not up after ${WIFI_WAIT}s (cmState=${st:-?})"
+  ( dump_logs ) &
   wifi_fail_streak=$((wifi_fail_streak + 1))
   [ "$wifi_fail_streak" -eq 1 ] || [ $((wifi_fail_streak % 10)) -eq 0 ] && { ( wifi_diag ) & }
   return 1

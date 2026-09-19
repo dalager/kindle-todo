@@ -305,9 +305,23 @@ Fill `.dev.vars`:
 | Var | What |
 |-----|------|
 | `TODO_TOKEN` | a long random string; the access gate for every URL |
-| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` | your Azure app registration |
+| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` | your Azure app registration (**the secret expires — see below**) |
 | `MS_REFRESH_TOKEN` | Microsoft refresh token (obtained once) |
 | `MS_DEFAULT_LIST_ID` | the To Do list to show (see below) |
+
+> [!IMPORTANT]
+> **`MS_CLIENT_SECRET` expires on a date Azure picks, and nothing warns you.**
+> When it lapses the token endpoint returns `invalid_client` / `AADSTS7000222`
+> and the wall shows **App credentials expired**. Re-consenting the account does
+> *not* fix it; only rotating the secret does:
+>
+> 1. Azure portal -> App registrations -> your app -> Certificates & secrets ->
+>    **New client secret**. Copy the **Value** (shown once), not the Secret ID.
+> 2. Update `MS_CLIENT_SECRET` in `worker/.dev.vars`, then
+>    `printf '%s' "$MS_CLIENT_SECRET" | wrangler secret put MS_CLIENT_SECRET`.
+>
+> **Current secret: created 2026-09-19, 24 months -> expires 2028-09-19.**
+> Update this line whenever you rotate it.
 
 Test locally (uses `.dev.vars`), then deploy:
 
@@ -541,6 +555,7 @@ fails, after a ~5-min last-known-good grace window:
 |:------:|-------|------------|
 | <img src="docs/errorpages/backend.png" width="120" alt="Microsoft To Do isn't responding"> | **Microsoft To Do isn't responding** — Graph is down, timing out, or rate-limiting. | Nothing — transient, clears itself. |
 | <img src="docs/errorpages/auth.png" width="120" alt="Microsoft sign-in expired"> | **Sign-in expired** — the refresh token was revoked or expired. | Mint a new refresh token and update the `MS_REFRESH_TOKEN` secret. |
+| <img src="docs/errorpages/credentials.png" width="120" alt="App credentials expired"> | **App credentials expired** — the *Azure app secret* lapsed (`invalid_client` / `AADSTS7000222`). Not the same as sign-in expired. | Rotate `MS_CLIENT_SECRET` (see [Part A](#part-a--deploy-the-worker)). |
 | <img src="docs/errorpages/list.png" width="120" alt="That list is gone"> | **List gone** — the selected list was deleted in To Do. | Pick another list in the web app. |
 
 **Drawn on the Kindle** — the Worker is unreachable, so the device draws a local

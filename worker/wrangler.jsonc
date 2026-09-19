@@ -29,10 +29,17 @@
 		{
 			"binding": "LIST_STORE",
 			"id": "c70188ef89424773ae5b6d046a304bd2"
+		},
+		// Persists Microsoft's rotating refresh token across cold starts, so the
+		// Worker stops replaying the bootstrap MS_REFRESH_TOKEN secret forever.
+		// NOTE: the bootstrap token is NOT invalidated on first refresh - it was
+		// still valid months on (verified 2026-09-19). The "sign-in expired"
+		// screens this comment once blamed on that were an expired Azure client
+		// secret (AADSTS7000222); see classifyProviderError in src/errors.ts.
+		{
+			"binding": "MS_TOKEN_STORE",
+			"id": "197f28a546544890a962a7116087396e"
 		}
-		// Optional: persist Microsoft's rotating refresh token across cold starts.
-		// Create it (`wrangler kv namespace create MS_TOKEN_STORE`) then uncomment:
-		// { "binding": "MS_TOKEN_STORE", "id": "<your-kv-namespace-id>" }
 	]
 	// Secrets (set with `wrangler secret put <NAME>`; kept in .dev.vars for local dev):
 	//   TODO_TOKEN          - access token gating every route (?t=...)

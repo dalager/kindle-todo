@@ -403,6 +403,17 @@ export default {
         render = () => renderTodoPng(data.todos, data.title, ctx);
       } catch (err) {
         const kind = classifyProviderError(err);
+        // Observability is enabled; without this the screen is the only symptom
+        // and the real cause (an OAuth code, a Graph status) is lost entirely.
+        const e = err as { name?: unknown; status?: unknown; body?: unknown };
+        console.error(
+          `todo.png failed -> ${kind}`,
+          JSON.stringify({
+            name: e?.name,
+            status: e?.status,
+            body: typeof e?.body === "string" ? e.body.slice(0, 500) : undefined,
+          }),
+        );
         const lkg = await getLastGood();
         if (lkg) {
           // Within the grace window: keep showing the last good list.

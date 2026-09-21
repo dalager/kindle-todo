@@ -90,6 +90,14 @@ lipc-set-prop com.lab126.powerd flIntensity "$FLINTENSITY" 2>/dev/null
 # `performance`. The kiosk is one curl + occasional fbink per poll — 396 MHz
 # is ample (e-ink refresh is EPDC-bound, not CPU-bound). Less heat, and
 # longer battery ride-through during a power cut.
-echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null
+#
+# ...but `powersave` is also the one factor common to every Wi-Fi wedge in the
+# outage log, including the Sep 19-20 one that happened with SUSPEND=0: a long
+# idle stretch at 396 MHz with the display stack stopped lets the SoC sit in
+# low-bus mode, and the suspicion is that SDIO traffic to the Broadcom chip
+# times out there. `ondemand` still idles at 396 MHz but clocks up on demand.
+# This is the one variable under test — see the Wi-Fi outage log in README.md.
+GOVERNOR="${GOVERNOR:-ondemand}"
+echo "$GOVERNOR" > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null
 
 exec /bin/sh /mnt/us/extensions/kindletodo/bin/image-loop.sh "$URL" "$INTERVAL"

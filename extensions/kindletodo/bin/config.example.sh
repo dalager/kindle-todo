@@ -55,6 +55,11 @@ TODO_TOKEN="your-token-here"
 # SSH, so with the defaults SSH only works by day while on the charger.
 # SUSPEND=1
 
+# CPU governor the kiosk runs under. `ondemand` (default) idles at 396 MHz but
+# clocks up on demand; `powersave` pins 396 MHz and is implicated in the Wi-Fi
+# wedge (see the Wi-Fi outage log in README.md).
+# GOVERNOR=ondemand
+
 # RTC whose wakealarm resumes the device. Auto-detected (rtc1, then rtc0);
 # set explicitly if the log says "no usable RTC wakealarm".
 # RTC="/sys/class/rtc/rtc1"

@@ -647,6 +647,8 @@ the `;dm` dumps in `documents/` on the device (Sep 15 and Sep 17 cover Sep 12–
 | Sep 17 ~08:00 | v2 | Wedged on the first battery cycle after a healthy 07:38 boot. | "Radio-off toggle is the trigger; revert to v1" | v1 wedged the same evening (next row), so the toggle was not the trigger. |
 | Sep 17 18:31 | v2 | Recovered on a laptop USB plug again. | | Same chain as 06:28. |
 | Sep 17 ~20:00 | v3: v1 behaviour + profile re-creation + curl caps + log dumps (uncommitted) | 13 clean cycles (`wifi up after 3s`), then `wifi not up after 60s`, cycle time stretched to 25–30 min, never recovered. Charger on at 05:39 Sep 18 (mode `awake`, 100 % Full) did **not** recover it. Laptop USB at 19:15 Sep 18 did not either (by 19:40). | | wifid alive all day (one PID, no crash loop), stuck in `state=Searching`, **no wpa_supplicant log at all** (`tinyrot: No file to rotate`), lipc reads take 1.6 s, cmState `PENDING` forever so the loop's READY rule never fires. A wall charger is not a USB host: no `request high bus`. |
+| Sep 19 23:00 → Sep 21 | v3 as committed (82a0bd4), **`SUSPEND=0`** on the device since Sep 18 20:35 | Reported as "worked in the evening, no Wi-Fi in the morning"; the charger was plugged in but switched off at the wall overnight. Switching it back on (yellow → green over a couple of hours) did not help, nor did several reboots. | "A night on battery / suspend cycles wedged it" | **Wrong: suspend was already off.** Every loop start since Sep 18 20:35 logs `suspend=0`, so the device merely slept awake. Last healthy join `wifi up after 1s` at Sep 19 21:27; first `nowifi` error screen at **Sep 20 03:07**, i.e. it wedged in the small hours of Sunday and sat dead on the charger *all Sunday* — the Monday morning discovery is ~27 h late. From 06:28 Sun onward: ~40 failed joins, cycle stretched 15 s → 22–30 min, `wirelessEnable` garbage (3148 / 8244 / 10725 / 30252), `cmState=PENDING`, `wlan0=dormant`, **every `*-wpa.txt` dump 0 bytes**. One wifid (PID 2315) alive since the 07:12 reboot, `state=Searching` forever, plus `lipc:sun: Reply for unknown serial` — the late-reply signature of the slow-userspace state. dmesg shows bcmdhd loaded cleanly at boot (firmware up, `Register interface [wlan0]`) and nothing since. |
+| Sep 21 (declared before the night) | v3 + `SUSPEND=0`, **one variable changed: CPU governor `powersave` → `ondemand`** (`GOVERNOR` in `boot-image.sh`) | Test of hypothesis 1. Pending. | | Pending — watch for the first `wifi not up after 60s` and whether cycle time stays at 15 s. |
 
 **Facts (from logs, not theory):**
 
@@ -663,12 +665,16 @@ the `;dm` dumps in `documents/` on the device (Sep 15 and Sep 17 cover Sep 12–
   25–30 minutes instead of 5. Warm reboots re-enter the slow state within minutes.
 - Nothing this repo does has ever un-wedged it. Both recoveries followed a laptop
   USB connection (`request high bus` + bcmdhd reload); a wall charger did not do it
-  on Sep 18; five warm reboots and one cold boot did not do it on Sep 15–17.
+  on Sep 18 or Sep 21 (a full yellow→green charge changed nothing); five warm reboots
+  and one cold boot did not do it on Sep 15–17, nor did the Sep 21 reboots.
 - Router ADR-0006 removed the handshake-timeout deauths (0 since Sep 15). Keep it.
 - Between Jul 14 and Sep 12 the loop never suspended and the device was stable
-  apart from one wedge on Aug 6. Suspend was introduced on Sep 12; every outage
-  since has been on a battery-mode or night-mode suspend cycle. Awake on the
-  charger (`SUSPEND_ON_CHARGER=0`) has a clean record.
+  apart from one wedge on Aug 6. Suspend was introduced on Sep 12, and every outage
+  up to Sep 18 was on a battery-mode or night-mode suspend cycle — but the
+  Sep 19→20 wedge happened with **`suspend=0`**, sleeping awake. Suspend is
+  therefore an accelerant, not the mechanism. What all of them still share is a
+  long idle stretch at `powersave` (396 MHz) with the display stack stopped, which
+  is hypothesis 1 below.
 
 **Open hypotheses, ranked, each with the test that settles it:**
 

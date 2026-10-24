@@ -82,10 +82,10 @@ log() { echo "$(date) $*" >> "$LOG"; }
 # Keep powerd's own screensaver/auto-suspend off; this loop decides when to sleep.
 lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
 
-# Keep the log bounded: past ~256 KB, keep only the recent tail. (Appended to
-# forever otherwise — hourly battery lines alone add up over months.)
+# Keep the log bounded: past ~256 KB, roll it to image.log.1 (one generation),
+# so an outage's onset survives the reboot that usually follows it.
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null)" -gt 262144 ] 2>/dev/null; then
-  tail -n 200 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+  mv -f "$LOG" "$LOG.1" 2>/dev/null
 fi
 
 log "image-loop start interval=${INTERVAL}s night=${NIGHT_START}-${NIGHT_END}(+${NIGHT_OFFSET}s) battery=${BATTERY_INTERVAL}/${BATTERY_LOW_INTERVAL}s suspend=${SUSPEND} radio_off=${WIFI_RADIO_OFF} suspend_on_charger=${SUSPEND_ON_CHARGER} tz=${TZ} ssid=${WIFI_SSID:-?} psk=${WIFI_PSK:+set} gw=${GATEWAY:-?} reboot_after=${REBOOT_AFTER_FAILS}"
@@ -211,17 +211,20 @@ wifi_diag() {
 }
 
 # On a failed join, copy what `;dm` would give us (dmesg, syslog, netlog,
-# wpa_supplicant) to the USB-visible partition. Max once per 30 min, keeps ~6.
+# wpa_supplicant) to the USB-visible partition. Runs in a subshell, so the
+# caller owns the throttle (first failure of a streak, then max once per 30 min).
+# The first dump of a streak is tagged "onset" and pruned separately (keeps 3),
+# so a long outage cannot rotate away the moment it started; others keep ~6.
 last_logdump=0
 dump_logs() {
-  now=$(date +%s); [ $(( now - last_logdump )) -ge 1800 ] || return 0
-  last_logdump=$now; d="$DIR/logs"; mkdir -p "$d" 2>/dev/null || return 0
-  t=$(date +%Y%m%d-%H%M%S)
+  d="$DIR/logs"; mkdir -p "$d" 2>/dev/null || return 0
+  t=$(date +%Y%m%d-%H%M%S)${1:+-$1}
   { dmesg 2>/dev/null | tail -n 400; } > "$d/$t-dmesg.txt" 2>/dev/null
   tail -n 600 /var/log/messages > "$d/$t-messages.txt" 2>/dev/null
   tail -n 300 /var/log/netlog > "$d/$t-netlog.txt" 2>/dev/null
   tail -n 300 /var/log/wpa_supplicant > "$d/$t-wpa.txt" 2>/dev/null
-  ls -1t "$d" 2>/dev/null | tail -n +25 | while read -r f; do rm -f "$d/$f"; done
+  ls -1t "$d" 2>/dev/null | grep -v -- -onset- | tail -n +25 | while read -r f; do rm -f "${d:?}/${f:?}"; done
+  ls -1t "$d" 2>/dev/null | grep -- -onset- | tail -n +13 | while read -r f; do rm -f "${d:?}/${f:?}"; done
   log "logs dumped to logs/$t-*"
 }
 
@@ -253,7 +256,12 @@ wait_wifi() {
     i=$((i + 1)); sleep 1
   done
   log "wifi not up after ${WIFI_WAIT}s (cmState=${st:-?})"
-  ( dump_logs ) &
+  now=$(date +%s)
+  if [ "$wifi_fail_streak" -eq 0 ]; then
+    last_logdump=$now; ( dump_logs onset ) &
+  elif [ $(( now - last_logdump )) -ge 1800 ]; then
+    last_logdump=$now; ( dump_logs ) &
+  fi
   wifi_fail_streak=$((wifi_fail_streak + 1))
   [ "$wifi_fail_streak" -eq 1 ] || [ $((wifi_fail_streak % 10)) -eq 0 ] && { ( wifi_diag ) & }
   return 1

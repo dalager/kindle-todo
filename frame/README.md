@@ -119,6 +119,41 @@ Services that ship to DK: [Maker Factory](https://makerfactory.dk/en/pages/onlin
 [Protolabs Network](https://www.hubs.com/3d-printing/denmark/copenhagen/),
 [Xometry](https://xometry.eu/en/fdm-3d-printing/), [Sculpteo](https://www.sculpteo.com/en/).
 
+## Build C — slim 3D print
+
+The first print showed the walls are far stronger than they need to be.
+`kindle_frame_slim.py` is a print-only version with a **3 mm wall** all round:
+**125.05 × 174.2 × 15 mm** instead of 150.8 × 192.2. The face still hides the
+Kindle bezel (borders: sides 16.6 · top 23.1 · bottom 27.5 mm), so it cannot get
+narrower without showing the bezel.
+
+The window edge is cut like a passe-partout: a **45° bevel** 2.4 mm wide slopes
+from the front face down to a 0.6 mm square edge at the screen (`BEVEL_ANGLE`,
+`BEVEL_LAND`). The flat part of the face is therefore 2.4 mm narrower on each side
+than the borders above.
+
+There is no room in a 3 mm wall for keyholes or panel screws, so both are gone.
+It hangs on a French cleat instead:
+
+| File | Part | Print |
+|---|---|---|
+| `kindle_frame_slim.stl` | Frame, 51 cm³. Open back, 45° lip inside the top wall. | Face-down, no supports |
+| `kindle_frame_slim_wallplate.stl` | Wall plate 117 × 120 × 3 mm, 41 cm³, bevelled top edge, 4 countersunk holes for 4 mm screws. | As exported (wall side down) |
+| `kindle_frame_slim.step` | Both parts in their hung position. | |
+
+1. Screw the plate to the wall, **bevel at the top, countersinks facing you**. Its
+   top edge ends up 3.6 mm below the frame's top edge.
+2. Tilt the Kindle into the frame top-first (under the lip), then let the bottom
+   drop onto the pads. Lay the cable into the bottom slot.
+3. Hold the frame ~3 mm high, push it flat to the wall and lower it onto the plate.
+
+The plate fills the gap behind the Kindle, so it also keeps the device in. Lift
+the frame 3 mm to take it off. The plate is 1 mm narrower than the pocket per
+side, which is all the sideways play there is.
+
+Regenerate with
+`flatpak run --command=FreeCADCmd org.freecad.FreeCAD kindle_frame_slim.py`.
+
 ## Hanging it
 
 Two pan-head screws (head ≤ 8.5 mm), **134.8 mm apart**, level. Hook the frame on
